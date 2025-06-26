@@ -391,6 +391,20 @@ def serial_command():
     return jsonify({"status": "sent", "command": cmd})
 
 
+@app.route("/api/latest_mqtt_post")
+def latest_mqtt_post():
+    with _data_lock:
+        if not raw_mqtt_history:
+            return jsonify({"error": "No MQTT messages available"}), 404
+        latest_post_str = raw_mqtt_history[-1]
+    try:
+        latest_post_json = json.loads(latest_post_str)
+        return jsonify(latest_post_json)
+    except json.JSONDecodeError:
+        # This case should ideally not happen if raw_mqtt_history only stores valid JSON strings
+        return jsonify({"error": "Failed to parse stored MQTT message"}), 500
+
+
 if __name__ == "__main__":
     try:
         _init_hardware()
