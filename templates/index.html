@@ -78,6 +78,46 @@
       gap: 0.75rem;
     }
 
+    .action-button {
+      background: var(--accent);
+      border: none;
+      color: var(--bg);
+      font-weight: 600;
+      padding: 0.5rem 1.1rem;
+      border-radius: 999px;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      box-shadow: 0 14px 30px rgba(14, 165, 233, 0.25);
+    }
+
+    .action-button:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 18px 30px rgba(14, 165, 233, 0.35);
+    }
+
+    .action-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
+      box-shadow: none;
+    }
+
+    .action-feedback {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-top: 0.4rem;
+      min-height: 1.2rem;
+    }
+
+    .action-feedback.success {
+      color: var(--success);
+    }
+
+    .action-feedback.error {
+      color: var(--danger);
+    }
+
     .timestamp {
       font-size: 0.85rem;
       color: var(--muted);
@@ -94,12 +134,28 @@
           rgba(14, 116, 144, 0.16) 64px
         ),
         linear-gradient(135deg, rgba(56, 189, 248, 0.25), rgba(14, 165, 233, 0.1));
-	  text: #f8fafc;
       border-radius: 14px;
       border: 1px solid rgba(6, 182, 212, 0.4);
       padding: clamp(1.25rem, 2vw, 1.75rem);
       text-shadow: 0 1px 2px rgba(45, 212, 191, 0.35);
       box-shadow: inset 0 0 25px rgba(6, 182, 212, 0.28);
+      display: grid;
+      gap: 1rem;
+      color: rgba(191, 219, 254, 0.65);
+    }
+
+    .lcd-controls {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.4rem;
+    }
+
+    .lcd-controls .action-button {
+      margin: 0;
+    }
+
+    #lcdContent {
       display: grid;
       gap: 0.8rem;
     }
@@ -113,13 +169,17 @@
     }
 
     #lcdDisplay .line strong {
-      color: rgb(248 250 252);
+      color: rgba(191, 219, 254, 0.85);
     }
 
     .lcd-placeholder {
       font-style: italic;
-      color: rgba(4, 47, 46, 0.6);
+      color: rgba(191, 219, 254, 0.65);
       text-align: center;
+    }
+
+    #lcdDisplay .action-feedback {
+      color: rgba(191, 219, 254, 0.65);
     }
 
     .history-table {
@@ -256,7 +316,13 @@
           <span class="pill">Live</span>
         </div>
         <div id="lcdDisplay">
-          <div class="lcd-placeholder">Awaiting first measurement…</div>
+          <div class="lcd-controls">
+            <button id="captureButton" class="action-button">Capture</button>
+            <span class="action-feedback" id="captureFeedback"></span>
+          </div>
+          <div id="lcdContent">
+            <div class="lcd-placeholder">Awaiting first measurement…</div>
+          </div>
         </div>
       </section>
 
@@ -281,11 +347,13 @@
   </div>
 
   <script>
-    const lcdDisplayEl = document.getElementById("lcdDisplay");
+    const lcdContentEl = document.getElementById("lcdContent");
     const measurementHistoryEl = document.getElementById("measurementHistory");
     const historyCountEl = document.getElementById("historyCount");
     const rawStreamEl = document.getElementById("rawStream");
     const lastUpdatedEl = document.getElementById("lastUpdated");
+    const captureButtonEl = document.getElementById("captureButton");
+    const captureFeedbackEl = document.getElementById("captureFeedback");
 
     const formatNumber = (value, suffix = "") => {
       if (value === null || value === undefined || Number.isNaN(value)) return "--";
@@ -302,9 +370,11 @@
     };
 
     const renderLCD = (current) => {
-      lcdDisplayEl.innerHTML = "";
+      if (!lcdContentEl) return;
+
+      lcdContentEl.innerHTML = "";
       if (!current || Object.keys(current).length === 0) {
-        lcdDisplayEl.innerHTML = '<div class="lcd-placeholder">Awaiting first measurement…</div>';
+        lcdContentEl.innerHTML = '<div class="lcd-placeholder">Awaiting first measurement…</div>';
         return;
       }
 
@@ -322,7 +392,7 @@
         const div = document.createElement("div");
         div.className = "line";
         div.innerHTML = text;
-        lcdDisplayEl.appendChild(div);
+        lcdContentEl.appendChild(div);
       });
     };
 
@@ -419,6 +489,35 @@
         console.error("Dashboard refresh error", error);
         lastUpdatedEl.textContent = "Unable to refresh data";
       }
+    }
+
+    if (captureButtonEl) {
+      captureButtonEl.addEventListener("click", async () => {
+        captureFeedbackEl.textContent = "";
+        captureFeedbackEl.classList.remove("success", "error");
+        captureButtonEl.disabled = true;
+        const originalText = captureButtonEl.dataset.originalText || captureButtonEl.textContent;
+        captureButtonEl.dataset.originalText = originalText;
+        captureButtonEl.textContent = "Capturing…";
+
+        try {
+          const response = await fetch("/api/capture", { method: "POST" });
+          if (!response.ok) {
+            throw new Error(`Request failed with status ${response.status}`);
+          }
+
+          const data = await response.json().catch(() => ({}));
+          captureFeedbackEl.textContent = data.message || "Capture requested.";
+          captureFeedbackEl.classList.add("success");
+        } catch (error) {
+          console.error("Capture trigger failed", error);
+          captureFeedbackEl.textContent = "Unable to trigger capture.";
+          captureFeedbackEl.classList.add("error");
+        } finally {
+          captureButtonEl.disabled = false;
+          captureButtonEl.textContent = captureButtonEl.dataset.originalText;
+        }
+      });
     }
 
     refreshDashboard();
