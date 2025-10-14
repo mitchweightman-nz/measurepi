@@ -33,6 +33,7 @@ from flask import Flask, jsonify, render_template, request
 MQTT_BROKER = os.getenv("MQTT_BROKER", "10.1.1.85")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
 MQTT_TOPIC_SUB = "measure/data"
+MQTT_TOPIC_LOG = "measure/log"
 MQTT_COMMAND_TOPIC = "measure/cmd"
 
 MAX_RAW_HISTORY = 200 
@@ -53,8 +54,9 @@ lcd = None  # I2C Character LCD object (initialized in _init_lcd_if_present)
 
 # Shared state for measurements, accessed by MQTT callback and Flask routes
 current_measurement = {}  
-measurement_history = []  
-raw_mqtt_history = []     
+measurement_history = []
+raw_mqtt_history = []
+measure_log_history = []
 _data_lock = threading.Lock()  
 _last_lcd_text = ""       
 
@@ -68,7 +70,9 @@ def _on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
         print(f"[MQTT] Connected successfully to broker {MQTT_BROKER}.")
         client.subscribe(MQTT_TOPIC_SUB)
+        client.subscribe(MQTT_TOPIC_LOG)
         print(f"[MQTT] Subscribed to topic: {MQTT_TOPIC_SUB}")
+        print(f"[MQTT] Subscribed to topic: {MQTT_TOPIC_LOG}")
     else:
         print(f"[MQTT] Connection to broker failed with code {rc}. Check broker address and network.")
 
@@ -196,6 +200,31 @@ def _on_message(client, userdata, msg):
             print(f"[MQTT] Error processing message from topic '{msg.topic}': {e}")
             traceback.print_exc()
 
+    elif msg.topic == MQTT_TOPIC_LOG:
+        try:
+            payload_str = msg.payload.decode('utf-8', errors='replace')
+        except Exception:
+            payload_str = repr(msg.payload)
+
+        entry = {
+            "topic": msg.topic,
+            "payload": payload_str,
+            "timestamp": time.time(),
+        }
+
+        with _data_lock:
+            measure_log_history.append(entry)
+            if len(measure_log_history) > MAX_RAW_HISTORY:
+                measure_log_history.pop(0)
+
+    else:
+        # Ignore unrelated topics but keep a trace for debugging
+        try:
+            payload_str = msg.payload.decode('utf-8', errors='replace')
+        except Exception:
+            payload_str = repr(msg.payload)
+        print(f"[MQTT] Received message on unexpected topic '{msg.topic}': {payload_str}")
+
 mqtt_client.on_message = _on_message
 
 
@@ -285,8 +314,9 @@ def json_data_route():
 @app.route("/api/raw")
 def raw_mqtt_history_route():
     with _data_lock:
-        raw_data_list = list(raw_mqtt_history) 
-    return jsonify({"raw_mqtt_payloads": raw_data_list})
+        raw_data_list = list(raw_mqtt_history)
+        log_data_list = [entry.copy() for entry in measure_log_history]
+    return jsonify({"raw_mqtt_payloads": raw_data_list, "log_messages": log_data_list})
 
 @app.route("/api/settings", methods=["GET", "POST"])
 def settings_api_route():
