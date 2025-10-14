@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>MeasurePi Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f172a;
+      --panel-bg: rgba(15, 23, 42, 0.75);
+      --panel-border: rgba(148, 163, 184, 0.35);
+      --text: #f8fafc;
+      --accent: #38bdf8;
+      --muted: #94a3b8;
+      --success: #4ade80;
+      --warning: #facc15;
+      --danger: #f87171;
+      font-family: "Segoe UI", "Helvetica Neue", system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at 20% 20%, rgba(59, 130, 246, 0.18), transparent 40%),
+                  radial-gradient(circle at 80% 0%, rgba(14, 165, 233, 0.18), transparent 42%),
+                  linear-gradient(135deg, #0f172a 0%, #020617 100%);
+      color: var(--text);
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: transparent;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(2rem, 2.5vw, 3rem);
+      letter-spacing: 0.04em;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    h2 {
+      margin: 0 0 0.5rem;
+      font-weight: 600;
+      font-size: clamp(1.1rem, 1.8vw, 1.5rem);
+      letter-spacing: 0.05em;
+      color: var(--accent);
+    }
+
+    .page {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: clamp(1.25rem, 3vw, 2.5rem);
+      display: flex;
+      flex-direction: column;
+      gap: clamp(1.5rem, 3vw, 2.5rem);
+    }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: clamp(1.25rem, 2.5vw, 2rem);
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 18px;
+      padding: clamp(1rem, 2vw, 1.75rem);
+      backdrop-filter: blur(18px);
+      box-shadow: 0 28px 50px rgba(15, 23, 42, 0.55);
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.75rem;
+      gap: 0.75rem;
+    }
+
+    .timestamp {
+      font-size: 0.85rem;
+      color: var(--muted);
+      letter-spacing: 0.03em;
+    }
+
+    #lcdDisplay {
+      font-family: "IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
+      background: repeating-linear-gradient(
+          0deg,
+          rgba(56, 189, 248, 0.12),
+          rgba(56, 189, 248, 0.12) 32px,
+          rgba(14, 116, 144, 0.16) 32px,
+          rgba(14, 116, 144, 0.16) 64px
+        ),
+        linear-gradient(135deg, rgba(56, 189, 248, 0.25), rgba(14, 165, 233, 0.1));
+      color: #042f2e;
+      border-radius: 14px;
+      border: 1px solid rgba(6, 182, 212, 0.4);
+      padding: clamp(1.25rem, 2vw, 1.75rem);
+      text-shadow: 0 1px 2px rgba(45, 212, 191, 0.35);
+      box-shadow: inset 0 0 25px rgba(6, 182, 212, 0.28);
+      display: grid;
+      gap: 0.8rem;
+    }
+
+    #lcdDisplay .line {
+      font-size: clamp(1.05rem, 2vw, 1.35rem);
+      letter-spacing: 0.08em;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    #lcdDisplay .line strong {
+      color: rgba(17, 94, 89, 0.85);
+    }
+
+    .lcd-placeholder {
+      font-style: italic;
+      color: rgba(4, 47, 46, 0.6);
+      text-align: center;
+    }
+
+    .history-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.92rem;
+    }
+
+    .history-table thead {
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    .history-table th,
+    .history-table td {
+      padding: 0.55rem 0.5rem;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+      text-align: left;
+    }
+
+    .history-table tbody tr:hover {
+      background: rgba(148, 163, 184, 0.08);
+    }
+
+    .history-empty {
+      padding: 1rem 0;
+      color: var(--muted);
+      font-style: italic;
+      text-align: center;
+    }
+
+    #rawStream {
+      display: grid;
+      gap: 0.6rem;
+      max-height: 420px;
+      overflow-y: auto;
+      background: rgba(15, 23, 42, 0.55);
+      border-radius: 12px;
+      padding: 0.85rem;
+      border: 1px solid rgba(148, 163, 184, 0.15);
+      font-family: "IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
+      font-size: 0.85rem;
+      line-height: 1.4;
+    }
+
+    .log-line {
+      padding: 0.5rem 0.65rem;
+      border-radius: 10px;
+      background: rgba(30, 64, 175, 0.35);
+      border: 1px solid rgba(96, 165, 250, 0.25);
+      display: grid;
+      gap: 0.25rem;
+    }
+
+    .log-line .topic {
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: rgba(191, 219, 254, 0.65);
+    }
+
+    .log-line .payload {
+      word-break: break-all;
+      color: rgba(226, 232, 240, 0.95);
+    }
+
+    .log-line .meta {
+      color: rgba(148, 163, 184, 0.75);
+      font-size: 0.7rem;
+      display: flex;
+      gap: 0.35rem;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.15rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      background: rgba(56, 189, 248, 0.2);
+      color: rgba(56, 189, 248, 0.95);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .updated-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+
+    .updated-indicator::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--success);
+      box-shadow: 0 0 12px rgba(74, 222, 128, 0.6);
+    }
+
+    @media (max-width: 768px) {
+      #lcdDisplay {
+        gap: 0.6rem;
+      }
+      #lcdDisplay .line {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.2rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="panel">
+      <div class="panel-header">
+        <h1>MeasurePi Dashboard</h1>
+        <span class="updated-indicator" id="lastUpdated">Waiting for data…</span>
+      </div>
+      <p style="margin: 0; color: var(--muted); max-width: 60ch;">
+        Live view of MQTT driven measurements, mirrored from the Arduino firmware. Dimensions are rounded according to the active configuration and the raw payload log is retained for diagnostics.
+      </p>
+    </header>
+
+    <div class="dashboard-grid">
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Emulated LCD Display</h2>
+          <span class="pill">Live</span>
+        </div>
+        <div id="lcdDisplay">
+          <div class="lcd-placeholder">Awaiting first measurement…</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Measurements Taken</h2>
+          <span class="pill" id="historyCount">0 entries</span>
+        </div>
+        <div id="measurementHistory">
+          <div class="history-empty">No measurements captured yet.</div>
+        </div>
+      </section>
+
+      <section class="panel" style="grid-column: 1 / -1;">
+        <div class="panel-header">
+          <h2>Arduino Log</h2>
+          <span class="pill">measure/log</span>
+        </div>
+        <div id="rawStream"></div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const lcdDisplayEl = document.getElementById("lcdDisplay");
+    const measurementHistoryEl = document.getElementById("measurementHistory");
+    const historyCountEl = document.getElementById("historyCount");
+    const rawStreamEl = document.getElementById("rawStream");
+    const lastUpdatedEl = document.getElementById("lastUpdated");
+
+    const formatNumber = (value, suffix = "") => {
+      if (value === null || value === undefined || Number.isNaN(value)) return "--";
+      const num = typeof value === "number" ? value : parseFloat(value);
+      if (!Number.isFinite(num)) return "--";
+      return `${num.toFixed(1)}${suffix}`;
+    };
+
+    const formatWeight = (value) => {
+      if (value === null || value === undefined || Number.isNaN(value)) return "Wt:--";
+      const num = typeof value === "number" ? value : parseFloat(value);
+      if (!Number.isFinite(num)) return "Wt:--";
+      return `Wt:${num.toFixed(2)}kg`;
+    };
+
+    const renderLCD = (current) => {
+      lcdDisplayEl.innerHTML = "";
+      if (!current || Object.keys(current).length === 0) {
+        lcdDisplayEl.innerHTML = '<div class="lcd-placeholder">Awaiting first measurement…</div>';
+        return;
+      }
+
+      const timestamp = current.timestamp ? new Date(current.timestamp * 1000) : new Date();
+      const timeStr = timestamp.toLocaleTimeString();
+
+      const lines = [
+        `<span><strong>H:</strong> ${formatNumber(current.height)} cm</span><span><strong>W:</strong> ${formatNumber(current.width)} cm</span>`,
+        `<span><strong>L:</strong> ${formatNumber(current.length)} cm</span><span>${formatWeight(current.weight ?? current.weight_net)}</span>`,
+        `<span><strong>Tare:</strong> ${current.tare_g ?? "--"} g</span><span>${current.weight_gross !== null && current.weight_gross !== undefined ? `Gross: ${formatNumber(current.weight_gross, "kg")}` : ""}</span>`,
+        `<span>${timeStr}</span><span>${current.note ? current.note : "MQTT Data Feed"}</span>`
+      ];
+
+      lines.forEach(text => {
+        const div = document.createElement("div");
+        div.className = "line";
+        div.innerHTML = text;
+        lcdDisplayEl.appendChild(div);
+      });
+    };
+
+    const renderHistory = (history) => {
+      if (!Array.isArray(history) || history.length === 0) {
+        measurementHistoryEl.innerHTML = '<div class="history-empty">No measurements captured yet.</div>';
+        historyCountEl.textContent = "0 entries";
+        return;
+      }
+
+      historyCountEl.textContent = `${history.length} entr${history.length === 1 ? "y" : "ies"}`;
+      const rows = history
+        .slice()
+        .reverse()
+        .map(item => {
+          const timestamp = item.timestamp ? new Date(item.timestamp * 1000) : null;
+          const ts = timestamp ? `${timestamp.toLocaleDateString()} ${timestamp.toLocaleTimeString()}` : "--";
+          return `
+            <tr>
+              <td>${ts}</td>
+              <td>${formatNumber(item.height)} cm</td>
+              <td>${formatNumber(item.width)} cm</td>
+              <td>${formatNumber(item.length)} cm</td>
+              <td>${item.weight !== undefined && item.weight !== null ? `${Number(item.weight).toFixed(2)} kg` : "--"}</td>
+            </tr>
+          `;
+        })
+        .join("");
+
+      measurementHistoryEl.innerHTML = `
+        <div class="table-wrapper">
+          <table class="history-table">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Height</th>
+                <th>Width</th>
+                <th>Length</th>
+                <th>Weight</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    };
+
+    const renderLog = (messages) => {
+      rawStreamEl.innerHTML = "";
+      if (!Array.isArray(messages) || messages.length === 0) {
+        rawStreamEl.innerHTML = '<div class="history-empty">No log messages received yet.</div>';
+        return;
+      }
+
+      messages.slice(-200).forEach(entry => {
+        const container = document.createElement("div");
+        container.className = "log-line";
+        const timestamp = entry.timestamp ? new Date(entry.timestamp * 1000) : new Date();
+        const timeStr = timestamp.toLocaleTimeString();
+        const payload = typeof entry.payload === "string" ? entry.payload : JSON.stringify(entry.payload);
+        container.innerHTML = `
+          <span class="topic">${entry.topic || "measure/log"}</span>
+          <span class="payload">${payload}</span>
+          <span class="meta"><span>${timeStr}</span></span>
+        `;
+        rawStreamEl.prepend(container);
+      });
+    };
+
+    async function refreshDashboard() {
+      try {
+        const [jsonRes, rawRes] = await Promise.all([
+          fetch("/json", { cache: "no-store" }),
+          fetch("/api/raw", { cache: "no-store" })
+        ]);
+
+        if (jsonRes.ok) {
+          const { current, history } = await jsonRes.json();
+          renderLCD(current);
+          renderHistory(history);
+          const ts = current && current.timestamp ? new Date(current.timestamp * 1000) : new Date();
+          lastUpdatedEl.textContent = `Updated ${ts.toLocaleTimeString()}`;
+        } else {
+          throw new Error("Failed to load measurement data");
+        }
+
+        if (rawRes.ok) {
+          const rawData = await rawRes.json();
+          renderLog(rawData.log_messages || []);
+        } else {
+          throw new Error("Failed to load log data");
+        }
+      } catch (error) {
+        console.error("Dashboard refresh error", error);
+        lastUpdatedEl.textContent = "Unable to refresh data";
+      }
+    }
+
+    refreshDashboard();
+    setInterval(refreshDashboard, 2500);
+  </script>
+</body>
+</html>
