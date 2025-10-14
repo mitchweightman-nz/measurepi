@@ -35,6 +35,7 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
 MQTT_TOPIC_SUB = "measure/data"
 MQTT_TOPIC_LOG = "measure/log"
 MQTT_COMMAND_TOPIC = "measure/cmd"
+MQTT_CAPTURE_TOPIC = "measure/CAP"
 
 MAX_RAW_HISTORY = 200 
 
@@ -388,13 +389,24 @@ def command_api_route():
     payload = request.get_json()
     command_to_send = str(payload.get("command", "")).strip()
     if not command_to_send: return jsonify({"error": "Command field is missing or empty"}), 400
-    
+
     if mqtt_client.is_connected():
         mqtt_client.publish(MQTT_COMMAND_TOPIC, command_to_send)
         print(f"[API-CMD] Command '{command_to_send}' published to MQTT topic '{MQTT_COMMAND_TOPIC}'.")
         return jsonify({"status": "sent", "command": command_to_send})
     else:
         print(f"[API-CMD] Failed to send command '{command_to_send}': MQTT client not connected.")
+        return jsonify({"status": "error", "message": "MQTT client not connected"}), 503
+
+
+@app.route("/api/capture", methods=["POST"])
+def capture_api_route():
+    if mqtt_client.is_connected():
+        mqtt_client.publish(MQTT_CAPTURE_TOPIC, "CAP")
+        print(f"[API-CAPTURE] Capture command published to MQTT topic '{MQTT_CAPTURE_TOPIC}'.")
+        return jsonify({"status": "sent", "message": "Capture requested."})
+    else:
+        print("[API-CAPTURE] Failed to publish capture command: MQTT client not connected.")
         return jsonify({"status": "error", "message": "MQTT client not connected"}), 503
 
 # ─── Main Application Logic ───────────────────────────────────────────────────
