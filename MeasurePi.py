@@ -32,8 +32,8 @@ from flask import Flask, jsonify, render_template, request
 # ─── Configuration Constants ─────────────────────────────────────────────────
 MQTT_BROKER = os.getenv("MQTT_BROKER", "10.1.1.85")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
-MQTT_TOPIC_SUB = "sensors"  
-MQTT_COMMAND_TOPIC = "measure/cmd" 
+MQTT_TOPIC_SUB = "measure/data"
+MQTT_COMMAND_TOPIC = "measure/cmd"
 
 MAX_RAW_HISTORY = 200 
 
@@ -79,9 +79,43 @@ def _on_disconnect(client, userdata, rc, properties=None):
 
 mqtt_client.on_disconnect = _on_disconnect
 
+def _safe_float(value):
+    try:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed == "":
+                return None
+            if trimmed.lower() == "null":
+                return None
+            return float(trimmed)
+        if isinstance(value, (int, float)):
+            return float(value)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _safe_int(value):
+    try:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed == "" or trimmed.lower() == "null":
+                return None
+            return int(float(trimmed))
+        if isinstance(value, (int, float)):
+            return int(value)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
 def _on_message(client, userdata, msg):
-    global _last_lcd_text 
-    # print(f"[MQTT] Received message on topic '{msg.topic}': {msg.payload.decode()}") 
+    global _last_lcd_text
+    # print(f"[MQTT] Received message on topic '{msg.topic}': {msg.payload.decode()}")
 
     if msg.topic == MQTT_TOPIC_SUB:
         try:
@@ -93,35 +127,50 @@ def _on_message(client, userdata, msg):
                 return
 
             new_measurements = {
-                "height": float(data["height"]),
-                "width": float(data["width"]),
-                "length": float(data["length"]),
+                "height": _safe_float(data.get("height")),
+                "width": _safe_float(data.get("width")),
+                "length": _safe_float(data.get("length")),
                 "timestamp": time.time()
             }
+
+            # Optional fields published by the UNO firmware
+            new_measurements["weight"] = _safe_float(data.get("weight"))
+            new_measurements["weight_net"] = _safe_float(data.get("weight_net"))
+            new_measurements["weight_gross"] = _safe_float(data.get("weight_gross"))
+            new_measurements["tare_g"] = _safe_int(data.get("tare_g"))
+
+            if new_measurements.get("weight") is None and new_measurements.get("weight_net") is not None:
+                new_measurements["weight"] = new_measurements["weight_net"]
 
             with _data_lock:
                 current_measurement.clear()
                 current_measurement.update(new_measurements)
-                
+
                 measurement_history.append(new_measurements.copy())
                 if len(measurement_history) > MAX_RAW_HISTORY:
                     measurement_history.pop(0)
-                
-                raw_mqtt_history.append(payload_str) 
+
+                raw_mqtt_history.append(payload_str)
                 if len(raw_mqtt_history) > MAX_RAW_HISTORY:
                     raw_mqtt_history.pop(0)
-            
+
             if lcd:
                 try:
                     display_data = _apply_rounding(new_measurements)
-                    
-                    disp_h = display_data.get('height', 0.0)
-                    disp_w = display_data.get('width', 0.0)
-                    disp_l = display_data.get('length', 0.0)
+
+                    disp_h = display_data.get('height') or 0.0
+                    disp_w = display_data.get('width') or 0.0
+                    disp_l = display_data.get('length') or 0.0
+
+                    weight_val = new_measurements.get("weight")
+                    if weight_val is None:
+                        weight_text = "Wt:--"
+                    else:
+                        weight_text = f"Wt:{weight_val:.2f}kg"
 
                     lcd_l1 = f"H:{disp_h:<5.1f} W:{disp_w:<5.1f}"
-                    lcd_l2 = f"L:{disp_l:<5.1f}cm" 
-                    lcd_l3 = "MQTT Data Updated" 
+                    lcd_l2 = f"L:{disp_l:<5.1f}cm {weight_text}"
+                    lcd_l3 = "MQTT Data Updated"
                     lcd_l4 = time.strftime("%H:%M:%S", time.localtime(new_measurements["timestamp"]))
 
                     lcd_text = (
@@ -130,14 +179,14 @@ def _on_message(client, userdata, msg):
                         f"{lcd_l3[:20]}\n"
                         f"{lcd_l4[:20]}"
                     )
-                    
+
                     if lcd_text != _last_lcd_text:
                         lcd.clear()
                         lcd.message = lcd_text
                         _last_lcd_text = lcd_text
                 except Exception as e:
                     print(f"[LCD] Error updating LCD from MQTT message: {e}")
-                    _last_lcd_text = "" 
+                    _last_lcd_text = ""
 
         except json.JSONDecodeError:
             print(f"[MQTT] Error decoding JSON from topic '{msg.topic}': {msg.payload.decode()}")
@@ -217,8 +266,20 @@ def index_route():
 def json_data_route():
     with _data_lock:
         current_data_copy = current_measurement.copy() if current_measurement else {}
-        history_to_send = [item.copy() for item in measurement_history[-20:]] 
+        history_to_send = [item.copy() for item in measurement_history[-20:]]
     current_rounded = _apply_rounding(current_data_copy)
+
+    for key in ["weight", "weight_net", "weight_gross"]:
+        value = current_data_copy.get(key)
+        if isinstance(value, (int, float)):
+            current_rounded[key] = round(value, 3)
+        elif value is None:
+            current_rounded[key] = None
+
+    if "tare_g" in current_data_copy:
+        tare_value = current_data_copy.get("tare_g")
+        current_rounded["tare_g"] = int(tare_value) if isinstance(tare_value, (int, float)) else None
+
     return jsonify({"current": current_rounded, "history": history_to_send})
 
 @app.route("/api/raw")
@@ -265,7 +326,7 @@ def settings_api_route():
 def lcd_text_api_route():
     with _data_lock:
         current_data_copy = current_measurement.copy() if current_measurement else {}
-    
+
     if not current_data_copy:
         return "LCD Status:\nWaiting for MQTT\nSensor Data..."
 
@@ -275,11 +336,14 @@ def lcd_text_api_route():
     disp_l = display_data.get('length', 0.0)
     timestamp = current_data_copy.get('timestamp', time.time())
 
+    weight_val = current_data_copy.get('weight')
+    weight_str = f"Wt:{weight_val:.2f}kg" if isinstance(weight_val, (int, float)) else "Wt:--"
+
     lcd_l1 = f"H:{disp_h:<5.1f} W:{disp_w:<5.1f}"[:20]
-    lcd_l2 = f"L:{disp_l:<5.1f}cm"[:20]
-    lcd_l3 = "MQTT Data Feed"[:20] 
+    lcd_l2 = f"L:{disp_l:<5.1f}cm {weight_str}"[:20]
+    lcd_l3 = "MQTT Data Feed"[:20]
     lcd_l4 = time.strftime("%H:%M:%S", time.localtime(timestamp))[:20]
-    
+
     return f"{lcd_l1}\n{lcd_l2}\n{lcd_l3}\n{lcd_l4}"
 
 @app.route("/api/measurements_current")
