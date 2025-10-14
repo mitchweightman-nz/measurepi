@@ -11,6 +11,7 @@ MeasurePi.py — Integrated Flask dashboard + MQTT client for Raspberry Pi
 import json
 import math
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -25,7 +26,7 @@ import paho.mqtt.client as mqtt
 import adafruit_character_lcd.character_lcd_i2c as charlcd
 
 # ─── Flask web service ───────────────────────────────────────────────────────
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, render_template, request
 
 
 # ─── Configuration Constants ─────────────────────────────────────────────────
@@ -42,63 +43,24 @@ DEFAULT_SSL_CERT_PATH = str(Path.home() / "measure_pi" / "cert.pem")
 DEFAULT_SSL_KEY_PATH = str(Path.home() / "measure_pi" / "private.pem")
 
 DEFAULT_ROUNDING_SETTINGS = {
-    "height": "ceil",
+    "height": "ceil", 
     "length": "ceil",
     "width": "ceil",
-    "weight": "3",
-    "weight_net": "3",
-    "weight_gross": "3",
 }
-
-MEASUREMENT_FIELDS = (
-    "height",
-    "width",
-    "length",
-    "weight",
-    "weight_net",
-    "weight_gross",
-    "tare_g",
-)
 
 # ─── Global State Variables ──────────────────────────────────────────────────
 lcd = None  # I2C Character LCD object (initialized in _init_lcd_if_present)
 
 # Shared state for measurements, accessed by MQTT callback and Flask routes
-current_measurement = {}
-measurement_history = []
-raw_mqtt_history = []
-_data_lock = threading.Lock()
-_last_lcd_text = ""
+current_measurement = {}  
+measurement_history = []  
+raw_mqtt_history = []     
+_data_lock = threading.Lock()  
+_last_lcd_text = ""       
 
 rounding_settings = DEFAULT_ROUNDING_SETTINGS.copy()
 
 mqtt_client = mqtt.Client(client_id=f"measure_pi_client_{os.getpid()}", protocol=mqtt.MQTTv311)
-
-
-# ─── Helpers ────────────────────────────────────────────────────────────────────
-def _coerce_float(value):
-    """Attempt to coerce a value to float, returning None if not possible."""
-    if value is None:
-        return None
-    try:
-        if isinstance(value, str) and not value.strip():
-            return None
-        return float(value)
-    except (ValueError, TypeError):
-        return None
-
-
-def _coerce_int(value):
-    """Attempt to coerce a value to int, returning None if not possible."""
-    if value is None:
-        return None
-    try:
-        if isinstance(value, str) and not value.strip():
-            return None
-        return int(value)
-    except (ValueError, TypeError):
-        coerced_float = _coerce_float(value)
-        return int(coerced_float) if coerced_float is not None else None
 
 
 # ─── MQTT Callbacks ──────────────────────────────────────────────────────────
@@ -117,35 +79,68 @@ def _on_disconnect(client, userdata, rc, properties=None):
 
 mqtt_client.on_disconnect = _on_disconnect
 
+def _safe_float(value):
+    try:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed == "":
+                return None
+            if trimmed.lower() == "null":
+                return None
+            return float(trimmed)
+        if isinstance(value, (int, float)):
+            return float(value)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _safe_int(value):
+    try:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed == "" or trimmed.lower() == "null":
+                return None
+            return int(float(trimmed))
+        if isinstance(value, (int, float)):
+            return int(value)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
 def _on_message(client, userdata, msg):
-    global _last_lcd_text 
-    # print(f"[MQTT] Received message on topic '{msg.topic}': {msg.payload.decode()}") 
+    global _last_lcd_text
+    # print(f"[MQTT] Received message on topic '{msg.topic}': {msg.payload.decode()}")
 
     if msg.topic == MQTT_TOPIC_SUB:
         try:
             payload_str = msg.payload.decode('utf-8')
             data = json.loads(payload_str)
 
-            missing_dims = [k for k in ("height", "width", "length") if k not in data]
-            if missing_dims:
-                print(f"[MQTT] Warning: Received data missing expected keys {missing_dims}. Data: {data}")
-                return
-
-            parsed_measurements = {}
-            for field in MEASUREMENT_FIELDS:
-                if field == "tare_g":
-                    parsed_measurements[field] = _coerce_int(data.get(field))
-                else:
-                    parsed_measurements[field] = _coerce_float(data.get(field))
-
-            if any(parsed_measurements[key] is None for key in ("height", "width", "length")):
-                print(f"[MQTT] Warning: Received data with invalid dimension values. Data: {data}")
+            if not all(k in data for k in ["height", "width", "length"]):
+                print(f"[MQTT] Warning: Received data missing expected keys. Data: {data}")
                 return
 
             new_measurements = {
-                **parsed_measurements,
+                "height": _safe_float(data.get("height")),
+                "width": _safe_float(data.get("width")),
+                "length": _safe_float(data.get("length")),
                 "timestamp": time.time()
             }
+
+            # Optional fields published by the UNO firmware
+            new_measurements["weight"] = _safe_float(data.get("weight"))
+            new_measurements["weight_net"] = _safe_float(data.get("weight_net"))
+            new_measurements["weight_gross"] = _safe_float(data.get("weight_gross"))
+            new_measurements["tare_g"] = _safe_int(data.get("tare_g"))
+
+            if new_measurements.get("weight") is None and new_measurements.get("weight_net") is not None:
+                new_measurements["weight"] = new_measurements["weight_net"]
 
             with _data_lock:
                 current_measurement.clear()
@@ -154,26 +149,29 @@ def _on_message(client, userdata, msg):
                 measurement_history.append(new_measurements.copy())
                 if len(measurement_history) > MAX_RAW_HISTORY:
                     measurement_history.pop(0)
-                
-                raw_mqtt_history.append(payload_str) 
+
+                raw_mqtt_history.append(payload_str)
                 if len(raw_mqtt_history) > MAX_RAW_HISTORY:
                     raw_mqtt_history.pop(0)
-            
+
             if lcd:
                 try:
                     display_data = _apply_rounding(new_measurements)
 
-                    disp_h = display_data.get('height', 0.0)
-                    disp_w = display_data.get('width', 0.0)
-                    disp_l = display_data.get('length', 0.0)
-                    disp_weight = display_data.get('weight')
-                    tare_val = new_measurements.get('tare_g')
-                    timestamp_txt = time.strftime("%H:%M:%S", time.localtime(new_measurements["timestamp"]))
+                    disp_h = display_data.get('height') or 0.0
+                    disp_w = display_data.get('width') or 0.0
+                    disp_l = display_data.get('length') or 0.0
+
+                    weight_val = new_measurements.get("weight")
+                    if weight_val is None:
+                        weight_text = "Wt:--"
+                    else:
+                        weight_text = f"Wt:{weight_val:.2f}kg"
 
                     lcd_l1 = f"H:{disp_h:<5.1f} W:{disp_w:<5.1f}"
-                    lcd_l2 = f"L:{disp_l:<5.1f}cm"
-                    lcd_l3 = f"Wt:{disp_weight:<6.3f}kg" if disp_weight is not None else "Wt: --"
-                    lcd_l4 = f"Tare:{tare_val}g" if tare_val is not None else timestamp_txt
+                    lcd_l2 = f"L:{disp_l:<5.1f}cm {weight_text}"
+                    lcd_l3 = "MQTT Data Updated"
+                    lcd_l4 = time.strftime("%H:%M:%S", time.localtime(new_measurements["timestamp"]))
 
                     lcd_text = (
                         f"{lcd_l1[:20]}\n"
@@ -181,14 +179,14 @@ def _on_message(client, userdata, msg):
                         f"{lcd_l3[:20]}\n"
                         f"{lcd_l4[:20]}"
                     )
-                    
+
                     if lcd_text != _last_lcd_text:
                         lcd.clear()
                         lcd.message = lcd_text
                         _last_lcd_text = lcd_text
                 except Exception as e:
                     print(f"[LCD] Error updating LCD from MQTT message: {e}")
-                    _last_lcd_text = "" 
+                    _last_lcd_text = ""
 
         except json.JSONDecodeError:
             print(f"[MQTT] Error decoding JSON from topic '{msg.topic}': {msg.payload.decode()}")
@@ -230,14 +228,12 @@ def _init_lcd_if_present():
 
 
 def _apply_rounding(measurements: dict) -> dict:
-    if not isinstance(measurements, dict):
-        return {}
-
+    if not isinstance(measurements, dict): return {}
     rounded_measurements = measurements.copy()
 
     for key, value in measurements.items():
-        if key not in rounding_settings or not isinstance(value, (int, float)):
-            continue
+        if key not in ["height", "width", "length"] or not isinstance(value, (int, float)):
+            continue 
 
         rule = rounding_settings.get(key)
         try:
@@ -246,72 +242,45 @@ def _apply_rounding(measurements: dict) -> dict:
             elif rule == "floor":
                 rounded_measurements[key] = math.floor(value)
             elif rule == "none" or rule is None:
-                rounded_measurements[key] = value
+                rounded_measurements[key] = round(value, 1) 
             elif isinstance(rule, str) and rule.isdigit():
                 precision = int(rule)
                 rounded_measurements[key] = round(value, precision)
-            else:
-                rounded_measurements[key] = round(value, 1)
+            else: 
+                rounded_measurements[key] = round(value, 1) 
         except Exception as e:
             print(f"[ROUNDING] Error applying rule '{rule}' for key '{key}', value '{value}': {e}")
-            rounded_measurements[key] = round(value, 1)
+            rounded_measurements[key] = round(value, 1) 
 
     return rounded_measurements
-
-
-# ─── Data Formatting ─────────────────────────────────────────────────────────
-def _format_measurement_for_api(measurement: dict, *, include_timestamp: bool = True, apply_rounding: bool = True) -> dict:
-    if not isinstance(measurement, dict) or not measurement:
-        return {}
-
-    payload = {field: measurement.get(field) for field in MEASUREMENT_FIELDS}
-
-    if apply_rounding:
-        numeric_subset = {k: v for k, v in payload.items() if isinstance(v, (int, float))}
-        rounded = _apply_rounding(numeric_subset)
-        payload.update(rounded)
-
-    if include_timestamp:
-        payload["timestamp"] = measurement.get("timestamp")
-
-    return payload
 
 
 # ─── Flask Web Application Routes ───────────────────────────────────────────
 app = Flask(__name__)
 
-@app.after_request
-def _add_cors_headers(response):
-    response.headers.setdefault("Access-Control-Allow-Origin", "*")
-    response.headers.setdefault("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-    response.headers.setdefault("Access-Control-Allow-Headers", "Content-Type")
-    return response
-
-
-@app.route("/", methods=["GET", "OPTIONS"])
+@app.route("/")
 def index_route():
-    if request.method == "OPTIONS":
-        return ("", 204)
-
-    with _data_lock:
-        current_data_copy = current_measurement.copy() if current_measurement else {}
-
-    if not current_data_copy:
-        return jsonify({"error": "no measurement available"}), 404
-
-    formatted = _format_measurement_for_api(current_data_copy)
-    return jsonify(formatted)
+    return render_template("index.html")
 
 @app.route("/json")
 def json_data_route():
     with _data_lock:
         current_data_copy = current_measurement.copy() if current_measurement else {}
         history_to_send = [item.copy() for item in measurement_history[-20:]]
+    current_rounded = _apply_rounding(current_data_copy)
 
-    current_formatted = _format_measurement_for_api(current_data_copy)
-    history_formatted = [_format_measurement_for_api(item) for item in history_to_send]
+    for key in ["weight", "weight_net", "weight_gross"]:
+        value = current_data_copy.get(key)
+        if isinstance(value, (int, float)):
+            current_rounded[key] = round(value, 3)
+        elif value is None:
+            current_rounded[key] = None
 
-    return jsonify({"current": current_formatted, "history": history_formatted})
+    if "tare_g" in current_data_copy:
+        tare_value = current_data_copy.get("tare_g")
+        current_rounded["tare_g"] = int(tare_value) if isinstance(tare_value, (int, float)) else None
+
+    return jsonify({"current": current_rounded, "history": history_to_send})
 
 @app.route("/api/raw")
 def raw_mqtt_history_route():
@@ -319,16 +288,14 @@ def raw_mqtt_history_route():
         raw_data_list = list(raw_mqtt_history) 
     return jsonify({"raw_mqtt_payloads": raw_data_list})
 
-@app.route("/api/settings", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/settings", methods=["GET", "POST"])
 def settings_api_route():
     global rounding_settings
-    if request.method == "OPTIONS":
-        return ("", 204)
     if request.method == "GET":
-        with _data_lock:
+        with _data_lock: 
             settings_copy = rounding_settings.copy()
         return jsonify(settings_copy)
-
+    
     if not request.is_json: return jsonify({"error": "Request must be JSON"}), 400
     new_settings_data = request.get_json()
     if not isinstance(new_settings_data, dict): return jsonify({"error": "JSON payload must be an object"}), 400
@@ -345,8 +312,7 @@ def settings_api_route():
             else:
                 print(f"[API-SETTINGS] Invalid value '{value}' for setting '{key}'. Ignored.")
         else:
-            valid_keys = ", ".join(sorted(temp_new_settings.keys()))
-            print(f"[API-SETTINGS] Unknown setting key '{key}'. Ignored (expected: {valid_keys}).")
+            print(f"[API-SETTINGS] Unknown setting key '{key}'. Ignored (expected: height, width, length).")
     
     if updated_any:
         with _data_lock: 
@@ -360,7 +326,7 @@ def settings_api_route():
 def lcd_text_api_route():
     with _data_lock:
         current_data_copy = current_measurement.copy() if current_measurement else {}
-    
+
     if not current_data_copy:
         return "LCD Status:\nWaiting for MQTT\nSensor Data..."
 
@@ -368,29 +334,26 @@ def lcd_text_api_route():
     disp_h = display_data.get('height', 0.0)
     disp_w = display_data.get('width', 0.0)
     disp_l = display_data.get('length', 0.0)
-    disp_weight = display_data.get('weight')
-    tare_val = current_data_copy.get('tare_g')
     timestamp = current_data_copy.get('timestamp', time.time())
 
+    weight_val = current_data_copy.get('weight')
+    weight_str = f"Wt:{weight_val:.2f}kg" if isinstance(weight_val, (int, float)) else "Wt:--"
+
     lcd_l1 = f"H:{disp_h:<5.1f} W:{disp_w:<5.1f}"[:20]
-    lcd_l2 = f"L:{disp_l:<5.1f}cm"[:20]
-    lcd_l3 = (f"Wt:{disp_weight:<6.3f}kg" if disp_weight is not None else "Wt: --")[:20]
-    lcd_l4_txt = f"Tare:{tare_val}g" if tare_val is not None else time.strftime("%H:%M:%S", time.localtime(timestamp))
-    lcd_l4 = lcd_l4_txt[:20]
+    lcd_l2 = f"L:{disp_l:<5.1f}cm {weight_str}"[:20]
+    lcd_l3 = "MQTT Data Feed"[:20]
+    lcd_l4 = time.strftime("%H:%M:%S", time.localtime(timestamp))[:20]
 
     return f"{lcd_l1}\n{lcd_l2}\n{lcd_l3}\n{lcd_l4}"
 
 @app.route("/api/measurements_current")
 def current_measurements_api_route():
     with _data_lock:
-        measurements_copy = current_measurement.copy()
-    formatted = _format_measurement_for_api(measurements_copy, apply_rounding=False)
-    return jsonify(formatted)
+        measurements_copy = current_measurement.copy() 
+    return jsonify(measurements_copy) 
 
-@app.route("/api/command", methods=["POST", "OPTIONS"])
+@app.route("/api/command", methods=["POST"])
 def command_api_route():
-    if request.method == "OPTIONS":
-        return ("", 204)
     if not request.is_json: return jsonify({"error": "Request must be JSON"}), 400
     payload = request.get_json()
     command_to_send = str(payload.get("command", "")).strip()
