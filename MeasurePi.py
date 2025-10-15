@@ -35,7 +35,7 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
 MQTT_TOPIC_SUB = "measure/data"
 MQTT_TOPIC_LOG = "measure/log"
 MQTT_COMMAND_TOPIC = "measure/cmd"
-MQTT_CAPTURE_TOPIC = "measure/CAP"
+MQTT_CAPTURE_TOPIC = "measure/cmd"
 
 MAX_RAW_HISTORY = 200 
 
