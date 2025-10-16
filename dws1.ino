@@ -11,6 +11,7 @@
  *
  * Wiring:
  *   CAPTURE button to PIN 12, other side to GND (INPUT_PULLUP).
+ *   TARE button to PIN 9, other side to GND (INPUT_PULLUP).
  *
  * Revision: V-12/10/25 01:30 (Add_Capture_Button+Shared_Trigger_Path)
  *************************************************************/
@@ -27,6 +28,7 @@
 
 // Buttons
 static const uint8_t PIN_CAPTURE_IN = 12;     // active LOW to GND; internal PULLUP enabled
+static const uint8_t PIN_TARE_IN    = 9;      // active LOW to GND; internal PULLUP enabled
 
 // Misc I/O
 static const uint8_t PIN_RESET_OUT  = 11;      // reset pulse to external I2C PCB (active LOW)
@@ -84,8 +86,9 @@ static int32_t g_tareOffsetRaw     = 0;  // additional offset from tare
 static WiFiClient   wifiClient;
 static PubSubClient mqttClient(wifiClient);
 
-static volatile bool g_trigCapture = false;   // shared trigger from MQTT or button
-static volatile bool g_trigTare    = false;
+static volatile bool g_trigCapture        = false;   // shared trigger from MQTT or button
+static volatile bool g_trigTare           = false;
+static volatile bool g_trigTareFromMqtt   = false;
 
 static long     g_lastStableWeight = 0;
 static uint8_t  g_commFailCount    = 0;
@@ -130,6 +133,7 @@ private:
 };
 
 static DebouncedButton btnCapture;
+static DebouncedButton btnTare;
 
 /* ------------------------------- Utils ------------------------------- */
 
@@ -339,7 +343,7 @@ static void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
   if (strEq(topic, TOPIC_CMD)) {
     if (isCaptureCmd(tmp)) g_trigCapture = true;   // main loop handles it
-    if (isTareCmd(tmp))    g_trigTare    = true;
+    if (isTareCmd(tmp))    { g_trigTare = true; g_trigTareFromMqtt = true; }
   }
 
   g_inCallback = false;
@@ -384,8 +388,9 @@ void setup() {
   pinMode(PIN_RESET_OUT, OUTPUT); digitalWrite(PIN_RESET_OUT, HIGH);
   pinMode(PIN_RTS_1, INPUT_PULLUP); pinMode(PIN_RTS_2, INPUT_PULLUP); pinMode(PIN_RTS_3, INPUT_PULLUP);
   btnCapture.begin(PIN_CAPTURE_IN, /*debounce ms*/30);
+  btnTare.begin(PIN_TARE_IN, /*debounce ms*/30);
   laserBegin(PIN_LASER_OUT);
-  logf("[GPIO] Pins configured (CAP button on D%u, active LOW)", PIN_CAPTURE_IN);
+  logf("[GPIO] Pins configured (CAP button on D%u, TARE button on D%u, active LOW)", PIN_CAPTURE_IN, PIN_TARE_IN);
 
   Wire.begin();
   Wire.setClock(I2C_CLOCK_HZ);
@@ -514,6 +519,21 @@ static void startCapture() {
   }
 }
 
+static void startTare(bool fromMqtt) {
+  if (!g_scalePresent) {
+    logLine("# Tare ignored (no scale detected)");
+    return;
+  }
+  if (g_tare.active) {
+    logLine("[TARE] Already in progress");
+    return;
+  }
+
+  if (fromMqtt) logLine("[MQTT] TARE requested");
+  else          logLine("[TARE] Command accepted");
+  g_tare.start(/*N=*/64, /*maxMs=*/1500);
+}
+
 /* -------------------------------- Loop ------------------------------- */
 
 void loop() {
@@ -525,10 +545,15 @@ void loop() {
 
   laserLoop();
 
-  // Button trigger (shared path with MQTT)
+  // Button triggers (shared path with MQTT)
   if (btnCapture.pressedEdge()) {
     logLine("[BTN] CAPTURE pressed");
     g_trigCapture = true;
+  }
+  if (btnTare.pressedEdge()) {
+    logLine("[BTN] TARE pressed");
+    g_trigTareFromMqtt = false;
+    g_trigTare = true;
   }
 
   g_tare.service();
@@ -549,8 +574,8 @@ void loop() {
 
   if (g_trigTare) {
     g_trigTare = false;
-    if (g_scalePresent && !g_tare.active) { logLine("[MQTT] TARE requested"); g_tare.start(/*N=*/64, /*maxMs=*/1500); }
-    else if (!g_scalePresent) { logLine("# Tare ignored (no scale detected)"); }
+    startTare(g_trigTareFromMqtt);
+    g_trigTareFromMqtt = false;
   }
 
   delay(1);
