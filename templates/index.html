@@ -439,12 +439,12 @@
       while (normalized.length < 4) {
         normalized.push("");
       }
-      lcdInstance.sendCommand(LCD_CMD_CLEAR);
+      lcdInstance.sendCommand(window.vrEmuLcd.LCD_CMD_CLEAR);
       normalized.forEach((line, row) => {
         const text = (line ?? "").toString();
         const padded = text.length > 16 ? text.slice(0, 16) : text.padEnd(16, " ");
         const offset = lcdInstance.getDataOffset(row, 0) & 0x7f;
-        lcdInstance.sendCommand(LCD_CMD_SET_DRAM_ADDR | offset);
+        lcdInstance.sendCommand(window.vrEmuLcd.LCD_CMD_SET_DRAM_ADDR | offset);
         lcdInstance.writeString(padded);
       });
     };
@@ -480,8 +480,8 @@
         resizeLcdCanvas();
         lcdInstance = window.vrEmuLcd.newLCD(128, 64, window.vrEmuLcd.CharacterRom.A00);
         lcdInstance.colorScheme = window.vrEmuLcd.Schemes.WhiteOnBlue;
-        lcdInstance.sendCommand(LCD_CMD_DISPLAY | LCD_CMD_DISPLAY_ON);
-        lcdInstance.sendCommand(LCD_CMD_CLEAR);
+        lcdInstance.sendCommand(window.vrEmuLcd.LCD_CMD_DISPLAY | window.vrEmuLcd.LCD_CMD_DISPLAY_ON);
+        lcdInstance.sendCommand(window.vrEmuLcd.LCD_CMD_CLEAR);
         applyLcdLines(pendingLcdLines);
         startLcdRenderLoop();
         setLcdOverlayMessage("Awaiting first measurement…");
