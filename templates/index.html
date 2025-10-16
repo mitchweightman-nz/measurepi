@@ -125,24 +125,22 @@
     }
 
     #lcdDisplay {
-      font-family: "VT323", "IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
-      background: linear-gradient(180deg, #d7f0c5 0%, #c4e39d 100%);
-      background-image:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.35), transparent 55%),
-        repeating-linear-gradient(0deg, transparent, transparent 18px, rgba(149, 179, 107, 0.35) 18px, rgba(149, 179, 107, 0.35) 20px);
-      border-radius: 14px;
-      border: 1px solid rgba(92, 124, 54, 0.8);
-      padding: clamp(1.25rem, 2vw, 1.75rem);
-      text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: clamp(1rem, 2.5vw, 1.75rem);
+      padding: clamp(1.1rem, 2.2vw, 1.75rem);
+      border-radius: 16px;
+      border: 1px solid rgba(37, 99, 235, 0.35);
+      background:
+        radial-gradient(circle at 20% 20%, rgba(96, 165, 250, 0.25), transparent 55%),
+        linear-gradient(155deg, rgba(15, 23, 42, 0.82) 0%, rgba(30, 64, 175, 0.45) 100%);
       box-shadow:
-        inset 0 2px 8px rgba(255, 255, 255, 0.6),
-        inset 0 -6px 12px rgba(85, 107, 47, 0.35),
-        0 12px 26px rgba(15, 23, 42, 0.15);
-      display: grid;
-      gap: 1rem;
-      color: #1a2c0a;
-      white-space: nowrap;
-      overflow-x: auto;
+        inset 0 12px 28px rgba(15, 23, 42, 0.45),
+        inset 0 -8px 16px rgba(59, 130, 246, 0.25),
+        0 18px 42px rgba(30, 64, 175, 0.18);
+      color: rgba(226, 232, 240, 0.95);
     }
 
     .lcd-controls {
@@ -150,47 +148,68 @@
       flex-direction: column;
       align-items: flex-start;
       gap: 0.4rem;
+      min-width: 180px;
     }
 
     .lcd-controls .action-button {
       margin: 0;
+      box-shadow: 0 14px 30px rgba(96, 165, 250, 0.35);
     }
 
-    #lcdContent {
-      display: grid;
-      gap: 0.8rem;
-    }
-
-    #lcdDisplay .line {
-      font-size: clamp(1.05rem, 2vw, 1.35rem);
-      letter-spacing: 0.08em;
+    .lcd-screen {
+      position: relative;
+      flex: 1 1 320px;
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      flex-wrap: nowrap;
-      gap: 1rem;
+      justify-content: center;
+      padding: clamp(0.85rem, 2vw, 1.35rem);
+      border-radius: 18px;
+      background:
+        radial-gradient(circle at 30% 25%, rgba(59, 130, 246, 0.4), transparent 70%),
+        linear-gradient(160deg, rgba(15, 23, 42, 0.85) 0%, rgba(30, 64, 175, 0.55) 40%, rgba(59, 130, 246, 0.25) 100%);
+      border: 1px solid rgba(59, 130, 246, 0.5);
+      box-shadow:
+        inset 0 6px 18px rgba(148, 197, 255, 0.25),
+        inset 0 -10px 22px rgba(15, 23, 42, 0.65),
+        0 18px 34px rgba(15, 23, 42, 0.35);
     }
 
-    #lcdDisplay .line span {
-      white-space: nowrap;
+    #lcdCanvas {
+      width: clamp(260px, 32vw, 420px);
+      aspect-ratio: 2 / 1;
+      display: block;
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.55);
+      image-rendering: pixelated;
     }
 
-    #lcdDisplay .line strong {
-      color: #0b3d0a;
-    }
-
-    #lcdDisplay .line span:last-child {
-      text-align: right;
-    }
-
-    .lcd-placeholder {
-      font-style: italic;
-      color: rgba(26, 44, 10, 0.65);
+    .lcd-overlay {
+      position: absolute;
+      inset: clamp(0.85rem, 2vw, 1.35rem);
+      display: flex;
+      align-items: center;
+      justify-content: center;
       text-align: center;
+      font-family: "VT323", "IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
+      font-size: clamp(1rem, 2vw, 1.45rem);
+      letter-spacing: 0.1em;
+      color: rgba(226, 232, 240, 0.78);
+      text-shadow: 0 2px 6px rgba(15, 23, 42, 0.75);
+      background: linear-gradient(160deg, rgba(15, 23, 42, 0.6), rgba(30, 64, 175, 0.45));
+      border-radius: 12px;
+      border: 1px dashed rgba(148, 197, 255, 0.35);
+      backdrop-filter: blur(4px);
+      transition: opacity 0.25s ease, visibility 0.25s ease;
+      pointer-events: none;
+    }
+
+    .lcd-overlay.is-hidden {
+      opacity: 0;
+      visibility: hidden;
     }
 
     #lcdDisplay .action-feedback {
-      color: rgba(26, 44, 10, 0.7);
+      color: rgba(226, 232, 240, 0.85);
     }
 
   #measurementHistory {
@@ -308,15 +327,22 @@
 
     @media (max-width: 768px) {
       #lcdDisplay {
-        gap: 0.6rem;
-      }
-      #lcdDisplay .line {
         flex-direction: column;
-        align-items: flex-start;
-        gap: 0.2rem;
+        align-items: stretch;
+      }
+
+      .lcd-screen {
+        flex: 1 1 auto;
+      }
+
+      #lcdCanvas {
+        width: 100%;
       }
     }
   </style>
+
+  <script src="https://visrealm.github.io/vrEmuLcd/src/vrEmuLcd.js"></script>
+  <script src="https://visrealm.github.io/vrEmuLcd/bin/vrEmuLcdWasm.js"></script>
 </head>
 <body>
   <div class="page">
@@ -341,8 +367,9 @@
             <button id="captureButton" class="action-button">Capture</button>
             <span class="action-feedback" id="captureFeedback"></span>
           </div>
-          <div id="lcdContent">
-            <div class="lcd-placeholder">Awaiting first measurement…</div>
+          <div class="lcd-screen">
+            <canvas id="lcdCanvas"></canvas>
+            <div class="lcd-overlay" id="lcdOverlay">Loading LCD emulator…</div>
           </div>
         </div>
       </section>
@@ -368,13 +395,166 @@
   </div>
 
   <script>
-    const lcdContentEl = document.getElementById("lcdContent");
+    const lcdOverlayEl = document.getElementById("lcdOverlay");
+    const lcdCanvasEl = document.getElementById("lcdCanvas");
+    const lcdCanvasCtx = lcdCanvasEl ? lcdCanvasEl.getContext("2d") : null;
+    let lcdInstance = null;
+    let lcdAnimationFrame = null;
+    let pendingLcdLines = ["MeasurePi Ready", "", "", ""];
+    let lcdHasData = false;
+
     const measurementHistoryEl = document.getElementById("measurementHistory");
     const historyCountEl = document.getElementById("historyCount");
     const rawStreamEl = document.getElementById("rawStream");
     const lastUpdatedEl = document.getElementById("lastUpdated");
     const captureButtonEl = document.getElementById("captureButton");
     const captureFeedbackEl = document.getElementById("captureFeedback");
+
+    const setLcdOverlayMessage = (message = "") => {
+      if (!lcdOverlayEl) return;
+      if (!message) {
+        lcdOverlayEl.classList.add("is-hidden");
+      } else {
+        lcdOverlayEl.textContent = message;
+        lcdOverlayEl.classList.remove("is-hidden");
+      }
+    };
+
+    const resizeLcdCanvas = () => {
+      if (!lcdCanvasEl) return;
+      const scale = window.devicePixelRatio || 1;
+      const width = lcdCanvasEl.clientWidth;
+      const height = lcdCanvasEl.clientHeight;
+      if (!width || !height) return;
+      lcdCanvasEl.width = Math.round(width * scale);
+      lcdCanvasEl.height = Math.round(height * scale);
+    };
+
+    window.addEventListener("resize", resizeLcdCanvas);
+    resizeLcdCanvas();
+
+    const applyLcdLines = (lines) => {
+      if (!lcdInstance) return;
+      const normalized = lines.slice(0, 4);
+      while (normalized.length < 4) {
+        normalized.push("");
+      }
+      lcdInstance.sendCommand(LCD_CMD_CLEAR);
+      normalized.forEach((line, row) => {
+        const text = (line ?? "").toString();
+        const padded = text.length > 16 ? text.slice(0, 16) : text.padEnd(16, " ");
+        const offset = lcdInstance.getDataOffset(row, 0) & 0x7f;
+        lcdInstance.sendCommand(LCD_CMD_SET_DRAM_ADDR | offset);
+        lcdInstance.writeString(padded);
+      });
+    };
+
+    const updateLcdLines = (lines) => {
+      pendingLcdLines = lines.slice(0, 4);
+      if (lcdInstance) {
+        applyLcdLines(pendingLcdLines);
+      }
+    };
+
+    const startLcdRenderLoop = () => {
+      if (!lcdCanvasEl || !lcdCanvasCtx || !lcdInstance) return;
+      if (lcdAnimationFrame) {
+        cancelAnimationFrame(lcdAnimationFrame);
+      }
+
+      const renderFrame = () => {
+        lcdCanvasCtx.clearRect(0, 0, lcdCanvasEl.width, lcdCanvasEl.height);
+        lcdInstance.render(lcdCanvasCtx, 0, 0, lcdCanvasEl.width, lcdCanvasEl.height);
+        lcdAnimationFrame = requestAnimationFrame(renderFrame);
+      };
+
+      renderFrame();
+    };
+
+    const initializeLcd = () => {
+      if (!lcdCanvasEl || !window.vrEmuLcd || typeof window.vrEmuLcd.setLoadedCallback !== "function") {
+        return;
+      }
+
+      window.vrEmuLcd.setLoadedCallback(() => {
+        resizeLcdCanvas();
+        lcdInstance = window.vrEmuLcd.newLCD(128, 64, window.vrEmuLcd.CharacterRom.A00);
+        lcdInstance.colorScheme = window.vrEmuLcd.Schemes.WhiteOnBlue;
+        lcdInstance.sendCommand(LCD_CMD_DISPLAY | LCD_CMD_DISPLAY_ON);
+        lcdInstance.sendCommand(LCD_CMD_CLEAR);
+        applyLcdLines(pendingLcdLines);
+        startLcdRenderLoop();
+        setLcdOverlayMessage("Awaiting first measurement…");
+      });
+    };
+
+    initializeLcd();
+
+    const formatLcdValue = (value, decimals = 1) => {
+      if (value === null || value === undefined) {
+        return decimals > 1 ? "--.--" : "--.--";
+      }
+      const num = Number(value);
+      if (!Number.isFinite(num)) {
+        return decimals > 1 ? "--.--" : "--.--";
+      }
+      let currentDecimals = decimals;
+      let str = num.toFixed(currentDecimals);
+      while (str.length > 5 && currentDecimals > 0) {
+        currentDecimals -= 1;
+        str = num.toFixed(currentDecimals);
+      }
+      if (str.length > 5) {
+        str = str.slice(0, 5);
+      }
+      return str.padStart(5, " ");
+    };
+
+    const formatLcdInteger = (value) => {
+      if (value === null || value === undefined) {
+        return "----";
+      }
+      const num = Number(value);
+      if (!Number.isFinite(num)) {
+        return "----";
+      }
+      let str = Math.round(num).toString();
+      if (str.length > 4) {
+        if (str.startsWith("-")) {
+          str = str.slice(0, 4);
+        } else {
+          str = str.slice(-4);
+        }
+      }
+      return str.padStart(4, " ");
+    };
+
+    const formatLcdNote = (note) => {
+      const base = note ? String(note).toUpperCase() : "MQTT";
+      return base.length > 7 ? base.slice(0, 7) : base.padEnd(7, " ");
+    };
+
+    const buildLcdLines = (current) => {
+      const height = formatLcdValue(current?.height, 1);
+      const width = formatLcdValue(current?.width, 1);
+      const length = formatLcdValue(current?.length, 1);
+      const netWeight = current?.weight ?? current?.weight_net;
+      const grossWeight = current?.weight_gross ?? netWeight;
+      const tare = current?.tare_g ?? current?.tare;
+      const weightDisplay = formatLcdValue(netWeight, 2);
+      const grossDisplay = formatLcdValue(grossWeight, 1);
+      const tareDisplay = formatLcdInteger(tare);
+      const timestamp = current?.timestamp ? new Date(current.timestamp * 1000) : new Date();
+      const timeStr = timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+      const note = formatLcdNote(current?.note);
+
+      return [
+        `H:${height} W:${width}`,
+        `L:${length} WT:${weightDisplay}`,
+        `T:${tareDisplay}g G:${grossDisplay}`,
+        `${timeStr} ${note}`
+      ];
+    };
 
     const formatNumber = (value, suffix = "") => {
       if (value === null || value === undefined || Number.isNaN(value)) return "--";
@@ -391,30 +571,16 @@
     };
 
     const renderLCD = (current) => {
-      if (!lcdContentEl) return;
-
-      lcdContentEl.innerHTML = "";
       if (!current || Object.keys(current).length === 0) {
-        lcdContentEl.innerHTML = '<div class="lcd-placeholder">Awaiting first measurement…</div>';
+        lcdHasData = false;
+        setLcdOverlayMessage("Awaiting first measurement…");
+        updateLcdLines(["MeasurePi Ready", "", "", ""]);
         return;
       }
 
-      const timestamp = current.timestamp ? new Date(current.timestamp * 1000) : new Date();
-      const timeStr = timestamp.toLocaleTimeString();
-
-      const lines = [
-        `<span><strong>H:</strong> ${formatNumber(current.height)} cm</span><span><strong>W:</strong> ${formatNumber(current.width)} cm</span>`,
-        `<span><strong>L:</strong> ${formatNumber(current.length)} cm</span><span>${formatWeight(current.weight ?? current.weight_net)}</span>`,
-        `<span><strong>Tare:</strong> ${current.tare_g ?? "--"} g</span><span>${current.weight_gross !== null && current.weight_gross !== undefined ? `Gross: ${formatNumber(current.weight_gross, "kg")}` : ""}</span>`,
-        `<span>${timeStr}</span><span>${current.note ? current.note : "MQTT Data Feed"}</span>`
-      ];
-
-      lines.forEach(text => {
-        const div = document.createElement("div");
-        div.className = "line";
-        div.innerHTML = text;
-        lcdContentEl.appendChild(div);
-      });
+      lcdHasData = true;
+      setLcdOverlayMessage("");
+      updateLcdLines(buildLcdLines(current));
     };
 
     const renderHistory = (history) => {
@@ -509,6 +675,9 @@
       } catch (error) {
         console.error("Dashboard refresh error", error);
         lastUpdatedEl.textContent = "Unable to refresh data";
+        if (!lcdHasData) {
+          setLcdOverlayMessage("Unable to refresh data");
+        }
       }
     }
 
