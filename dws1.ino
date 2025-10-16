@@ -239,31 +239,36 @@ struct WeightSampler {
 
 struct TareOp {
   bool active=false, success=false;
-  uint8_t targetN=0, count=0;
-  int64_t acc=0;
+  uint8_t averageN=0;
   uint32_t timeoutAt=0;
+  unsigned long windowMs=0;
+  bool started=false;
   void start(uint8_t n, uint16_t maxMs) {
     if (!g_scalePresent) { active=false; success=false; return; }
-    active=true; success=false; targetN=n; count=0; acc=0; timeoutAt=millis()+maxMs;
-    logf("[SCALE] Tare start N=%u window=%ums", n, (unsigned)maxMs);
+    if (n == 0) n = 1;
+    active = true;
+    success = false;
+    averageN = n;
+    timeoutAt = millis() + maxMs;
+    windowMs = maxMs;
+    started = false;
+    logf("[SCALE] Tare start N=%u window=%ums", (unsigned)averageN, (unsigned)maxMs);
   }
   void service() {
     if (!active) return;
     if ((int32_t)(millis() - timeoutAt) >= 0) { active=false; success=false; logLine("[SCALE] Tare timeout"); return; }
+    if (started) return;
     if (!selectNAU()) return;
     if (!g_scale.available()) return;
 
-    int32_t raw = g_scale.getReading();
-    acc += raw; count++;
-    if (count >= targetN) {
-      const int32_t rawAvg = (int32_t)(acc / targetN);
-      g_tareOffsetRaw = rawAvg - g_factoryZeroOffset;
-      const int32_t combined = g_factoryZeroOffset + g_tareOffsetRaw;
-      g_scale.setZeroOffset(combined);
-      success = true; active = false;
-      const long tare_g = lroundf((float)g_tareOffsetRaw / NAU_CAL_FACTOR);
-      logf("[SCALE] Tare OK, tare_g=%ld", tare_g);
-    }
+    started = true;
+    g_scale.calculateZeroOffset(averageN, windowMs);
+    const int32_t combined = g_scale.getZeroOffset();
+    g_tareOffsetRaw = combined - g_factoryZeroOffset;
+    g_scale.setZeroOffset(combined);
+    success = true; active = false;
+    const long tare_g = lroundf((float)g_tareOffsetRaw / NAU_CAL_FACTOR);
+    logf("[SCALE] Tare OK, tare_g=%ld", tare_g);
   }
   bool done() const { return !active; }
 } g_tare;
