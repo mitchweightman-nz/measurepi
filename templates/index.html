@@ -557,6 +557,28 @@
       return base.length > 7 ? base.slice(0, 7) : base.padEnd(7, " ");
     };
 
+    const hasMeasurementPayload = (candidate) => {
+      if (!candidate || typeof candidate !== "object") {
+        return false;
+      }
+      const keys = ["height", "width", "length", "weight", "weight_net", "weight_gross"];
+      return keys.some(key => candidate[key] !== null && candidate[key] !== undefined);
+    };
+
+    const selectLatestMeasurement = (current, history) => {
+      if (hasMeasurementPayload(current)) {
+        return current;
+      }
+      if (Array.isArray(history)) {
+        for (let idx = history.length - 1; idx >= 0; idx -= 1) {
+          if (hasMeasurementPayload(history[idx])) {
+            return history[idx];
+          }
+        }
+      }
+      return null;
+    };
+
     const buildLcdLines = (current) => {
       const height = formatLcdValue(current?.height, 1);
       const width = formatLcdValue(current?.width, 1);
@@ -593,8 +615,9 @@
       return `Wt:${num.toFixed(2)}kg`;
     };
 
-    const renderLCD = (current) => {
-      if (!current || Object.keys(current).length === 0) {
+    const renderLCD = (current, history) => {
+      const latest = selectLatestMeasurement(current, history);
+      if (!latest) {
         lcdHasData = false;
         setLcdOverlayMessage("Awaiting first measurement…");
         updateLcdLines(["MeasurePi Ready", "", "", ""]);
@@ -603,7 +626,7 @@
 
       lcdHasData = true;
       setLcdOverlayMessage("");
-      updateLcdLines(buildLcdLines(current));
+      updateLcdLines(buildLcdLines(latest));
     };
 
     const renderHistory = (history) => {
@@ -681,7 +704,7 @@
 
         if (jsonRes.ok) {
           const { current, history } = await jsonRes.json();
-          renderLCD(current);
+          renderLCD(current, history);
           renderHistory(history);
           const ts = current && current.timestamp ? new Date(current.timestamp * 1000) : new Date();
           lastUpdatedEl.textContent = `Updated ${ts.toLocaleTimeString()}`;
