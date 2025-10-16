@@ -156,6 +156,23 @@
       box-shadow: 0 14px 30px rgba(96, 165, 250, 0.35);
     }
 
+    .lcd-controls--right {
+      align-items: flex-end;
+    }
+
+    .lcd-controls--right .action-feedback {
+      text-align: right;
+    }
+
+    .action-button--secondary {
+      background: var(--warning);
+      box-shadow: 0 14px 30px rgba(202, 138, 4, 0.35);
+    }
+
+    .action-button--secondary:hover:not(:disabled) {
+      box-shadow: 0 18px 32px rgba(202, 138, 4, 0.45);
+    }
+
     .lcd-screen {
       position: relative;
       flex: 1 1 320px;
@@ -371,6 +388,10 @@
             <canvas id="lcdCanvas"></canvas>
             <div class="lcd-overlay" id="lcdOverlay">Loading LCD emulator…</div>
           </div>
+          <div class="lcd-controls lcd-controls--right">
+            <button id="tareButton" class="action-button action-button--secondary">Tare</button>
+            <span class="action-feedback" id="tareFeedback"></span>
+          </div>
         </div>
       </section>
 
@@ -409,6 +430,8 @@
     const lastUpdatedEl = document.getElementById("lastUpdated");
     const captureButtonEl = document.getElementById("captureButton");
     const captureFeedbackEl = document.getElementById("captureFeedback");
+    const tareButtonEl = document.getElementById("tareButton");
+    const tareFeedbackEl = document.getElementById("tareFeedback");
 
     const setLcdOverlayMessage = (message = "") => {
       if (!lcdOverlayEl) return;
@@ -706,6 +729,40 @@
         } finally {
           captureButtonEl.disabled = false;
           captureButtonEl.textContent = captureButtonEl.dataset.originalText;
+        }
+      });
+    }
+
+    if (tareButtonEl) {
+      tareButtonEl.addEventListener("click", async () => {
+        tareFeedbackEl.textContent = "";
+        tareFeedbackEl.classList.remove("success", "error");
+        tareButtonEl.disabled = true;
+        const originalText = tareButtonEl.dataset.originalText || tareButtonEl.textContent;
+        tareButtonEl.dataset.originalText = originalText;
+        tareButtonEl.textContent = "Taring…";
+
+        try {
+          const response = await fetch("/api/command", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ command: "TARE" })
+          });
+
+          if (!response.ok) {
+            throw new Error(`Request failed with status ${response.status}`);
+          }
+
+          const data = await response.json().catch(() => ({}));
+          tareFeedbackEl.textContent = data.message || "Tare command sent.";
+          tareFeedbackEl.classList.add("success");
+        } catch (error) {
+          console.error("Tare trigger failed", error);
+          tareFeedbackEl.textContent = "Unable to trigger tare.";
+          tareFeedbackEl.classList.add("error");
+        } finally {
+          tareButtonEl.disabled = false;
+          tareButtonEl.textContent = tareButtonEl.dataset.originalText;
         }
       });
     }
