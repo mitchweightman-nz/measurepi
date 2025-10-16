@@ -6,20 +6,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     :root {
-      color-scheme: light dark;
-      --bg: #0f172a;
-      --panel-bg: rgba(15, 23, 42, 0.75);
+      color-scheme: light;
+      --bg: #f1f5f9;
+      --panel-bg: rgba(255, 255, 255, 0.88);
       --panel-border: rgba(148, 163, 184, 0.35);
-      --text: #f8fafc;
-      --accent: #38bdf8;
-      --muted: #94a3b8;
-      --success: #4ade80;
-      --warning: #facc15;
-      --danger: #f87171;
+      --text: #0f172a;
+      --accent: #2563eb;
+      --muted: #64748b;
+      --success: #16a34a;
+      --warning: #ca8a04;
+      --danger: #dc2626;
       font-family: "Segoe UI", "Helvetica Neue", system-ui, -apple-system, sans-serif;
       background: radial-gradient(circle at 20% 20%, rgba(59, 130, 246, 0.18), transparent 40%),
-                  radial-gradient(circle at 80% 0%, rgba(14, 165, 233, 0.18), transparent 42%),
-                  linear-gradient(135deg, #0f172a 0%, #020617 100%);
+                  radial-gradient(circle at 80% 0%, rgba(14, 165, 233, 0.12), transparent 42%),
+                  linear-gradient(135deg, #e2e8f0 0%, #f8fafc 100%);
       color: var(--text);
     }
 
@@ -66,8 +66,8 @@
       border: 1px solid var(--panel-border);
       border-radius: 18px;
       padding: clamp(1rem, 2vw, 1.75rem);
-      backdrop-filter: blur(18px);
-      box-shadow: 0 28px 50px rgba(15, 23, 42, 0.55);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 25px 45px rgba(15, 23, 42, 0.08);
     }
 
     .panel-header {
@@ -81,19 +81,19 @@
     .action-button {
       background: var(--accent);
       border: none;
-      color: var(--bg);
+      color: #ffffff;
       font-weight: 600;
       padding: 0.5rem 1.1rem;
       border-radius: 999px;
       letter-spacing: 0.05em;
       cursor: pointer;
       transition: transform 0.2s ease, box-shadow 0.2s ease;
-      box-shadow: 0 14px 30px rgba(14, 165, 233, 0.25);
+      box-shadow: 0 14px 30px rgba(37, 99, 235, 0.25);
     }
 
     .action-button:hover:not(:disabled) {
       transform: translateY(-1px);
-      box-shadow: 0 18px 30px rgba(14, 165, 233, 0.35);
+      box-shadow: 0 18px 30px rgba(37, 99, 235, 0.35);
     }
 
     .action-button:disabled {
@@ -125,23 +125,22 @@
     }
 
     #lcdDisplay {
-      font-family: "IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
-      background: repeating-linear-gradient(
-          0deg,
-          rgba(56, 189, 248, 0.12),
-          rgba(56, 189, 248, 0.12) 32px,
-          rgba(14, 116, 144, 0.16) 32px,
-          rgba(14, 116, 144, 0.16) 64px
-        ),
-        linear-gradient(135deg, rgba(56, 189, 248, 0.25), rgba(14, 165, 233, 0.1));
+      font-family: "VT323", "IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
+      background: linear-gradient(180deg, #d7f0c5 0%, #c4e39d 100%);
+      background-image:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.35), transparent 55%),
+        repeating-linear-gradient(0deg, transparent, transparent 18px, rgba(149, 179, 107, 0.35) 18px, rgba(149, 179, 107, 0.35) 20px);
       border-radius: 14px;
-      border: 1px solid rgba(6, 182, 212, 0.4);
+      border: 1px solid rgba(92, 124, 54, 0.8);
       padding: clamp(1.25rem, 2vw, 1.75rem);
-      text-shadow: 0 1px 2px rgba(45, 212, 191, 0.35);
-      box-shadow: inset 0 0 25px rgba(6, 182, 212, 0.28);
+      text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
+      box-shadow:
+        inset 0 2px 8px rgba(255, 255, 255, 0.6),
+        inset 0 -6px 12px rgba(85, 107, 47, 0.35),
+        0 12px 26px rgba(15, 23, 42, 0.15);
       display: grid;
       gap: 1rem;
-      color: rgba(191, 219, 254, 0.65);
+      color: #1a2c0a;
     }
 
     .lcd-controls {
@@ -166,26 +165,40 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: nowrap;
+      gap: 1rem;
+    }
+
+    #lcdDisplay .line span {
+      white-space: nowrap;
     }
 
     #lcdDisplay .line strong {
-      color: rgba(191, 219, 254, 0.85);
+      color: #0b3d0a;
+    }
+
+    #lcdDisplay .line span:last-child {
+      text-align: right;
     }
 
     .lcd-placeholder {
       font-style: italic;
-      color: rgba(191, 219, 254, 0.65);
+      color: rgba(26, 44, 10, 0.65);
       text-align: center;
     }
 
     #lcdDisplay .action-feedback {
-      color: rgba(191, 219, 254, 0.65);
+      color: rgba(26, 44, 10, 0.7);
     }
 
     .history-table {
       width: 100%;
       border-collapse: collapse;
       font-size: 0.92rem;
+    }
+
+    .table-wrapper {
+      overflow-x: auto;
     }
 
     .history-table thead {
@@ -200,10 +213,11 @@
       padding: 0.55rem 0.5rem;
       border-bottom: 1px solid rgba(148, 163, 184, 0.15);
       text-align: left;
+      white-space: nowrap;
     }
 
     .history-table tbody tr:hover {
-      background: rgba(148, 163, 184, 0.08);
+      background: rgba(148, 163, 184, 0.15);
     }
 
     .history-empty {
@@ -218,10 +232,10 @@
       gap: 0.6rem;
       max-height: 420px;
       overflow-y: auto;
-      background: rgba(15, 23, 42, 0.55);
+      background: rgba(15, 23, 42, 0.05);
       border-radius: 12px;
       padding: 0.85rem;
-      border: 1px solid rgba(148, 163, 184, 0.15);
+      border: 1px solid rgba(148, 163, 184, 0.2);
       font-family: "IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
       font-size: 0.85rem;
       line-height: 1.4;
@@ -230,8 +244,8 @@
     .log-line {
       padding: 0.5rem 0.65rem;
       border-radius: 10px;
-      background: rgba(30, 64, 175, 0.35);
-      border: 1px solid rgba(96, 165, 250, 0.25);
+      background: rgba(59, 130, 246, 0.12);
+      border: 1px solid rgba(59, 130, 246, 0.25);
       display: grid;
       gap: 0.25rem;
     }
@@ -240,16 +254,16 @@
       font-size: 0.68rem;
       letter-spacing: 0.08em;
       text-transform: uppercase;
-      color: rgba(191, 219, 254, 0.65);
+      color: rgba(30, 64, 175, 0.7);
     }
 
     .log-line .payload {
       word-break: break-all;
-      color: rgba(226, 232, 240, 0.95);
+      color: #1f2937;
     }
 
     .log-line .meta {
-      color: rgba(148, 163, 184, 0.75);
+      color: rgba(71, 85, 105, 0.85);
       font-size: 0.7rem;
       display: flex;
       gap: 0.35rem;
