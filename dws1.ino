@@ -251,6 +251,7 @@ struct WeightSampler {
 
   void start(uint8_t n, uint16_t maxMs) {
     if (!g_scalePresent) { active=false; success=false; return; }
+    if (n == 0) n = 1;
     active = true; success = false; targetN = n; count = 0; acc = 0;
     gramsNet = gramsGross = tareGrams = 0;
     timeoutAt = millis() + maxMs;
@@ -283,26 +284,29 @@ struct WeightSampler {
 
 struct TareOp {
   bool active=false, success=false;
-  uint8_t averageN=0;
+  uint8_t averageN=0, count=0;
   uint32_t timeoutAt=0;
-  bool started=false;
+  int64_t acc=0;
   void start(uint8_t n, uint16_t maxMs) {
     if (!g_scalePresent) { active=false; success=false; return; }
     if (n == 0) n = 1;
     active = true; success = false;
     averageN = n;
+    count = 0; acc = 0;
     timeoutAt = millis() + maxMs;
-    started = false;
     logf("[SCALE] Tare start N=%u window=%ums", (unsigned)averageN, (unsigned)maxMs);
   }
   void service() {
     if (!active) return;
     if ((int32_t)(millis() - timeoutAt) >= 0) { active=false; success=false; logLine("[SCALE] Tare timeout"); return; }
-    if (started) return;
     if (!g_scale.is_ready()) return;
 
-    started = true;
-    int32_t avg = (int32_t)g_scale.read_average(averageN);
+    int32_t raw = (int32_t)g_scale.read();
+    acc += raw;
+    count++;
+    if (count < averageN) return;
+
+    const int32_t avg = (int32_t)(acc / averageN);
     g_tareOffsetRaw = avg - g_factoryZeroOffset;
     g_scale.set_offset((long)(g_factoryZeroOffset + g_tareOffsetRaw));
     success = true; active = false;
