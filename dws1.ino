@@ -14,6 +14,8 @@
  *   CAPTURE button -> D12 to GND (INPUT_PULLUP)
  *   TARE button    -> D9  to GND (INPUT_PULLUP)
  *   LCD (I²C PCF8574) on same I²C bus as TCA (auto-addr)
+ *   HX711 DOUT     -> D2  (digital)
+ *   HX711 SCK      -> D3  (digital)
  *
  * Revision: V-16/10/25 05:44 (Add_LCD_Log_20x4)
  *************************************************************/
@@ -511,11 +513,13 @@ static void publishJson_any(float h,float w,float l, bool haveScale, float net_k
     strcpy(netTxt, "null"); strcpy(grossTxt, "null"); strcpy(tareTxt, "null");
   }
 
+  const char* weightTxt = grossTxt;
+
   char payload[256];
   snprintf(payload,sizeof(payload),
     "{\"height\":%s,\"width\":%s,\"length\":%s,"
     "\"weight\":%s,\"weight_net\":%s,\"weight_gross\":%s,\"tare_g\":%s}",
-    hTxt,wTxt,lTxt, netTxt,netTxt,grossTxt,tareTxt);
+    hTxt,wTxt,lTxt, weightTxt,netTxt,grossTxt,tareTxt);
 
   mqttClient.publish(TOPIC_DATA, payload, false);
   logLine("[MQTT] Publish data OK");
