@@ -1,5 +1,5 @@
 /*************************************************************
- * UNO R4 WiFi — TF-Luna x3 via TCA9548A + NAU7802 load-cell
+ * UNO R4 WiFi — TF-Luna x3 via TCA9548A + HX711 load-cell
  * MQTT + Capture/Tare Buttons, non-blocking scale sampler,
  * JSON nulls, deferred MQTT logging outside callback,
  * retained CMD cleared, and 20x4 LCD live log display.
@@ -23,7 +23,7 @@
 #include <WiFiS3.h>
 #include <PubSubClient.h>
 #include <TFLI2C.h>
-#include <SparkFun_Qwiic_Scale_NAU7802_Arduino_Library.h>
+#include <HX711.h>
 #include <math.h>
 
 // -------- LCD 20x4 (hd44780_I2Cexp) --------
@@ -57,14 +57,17 @@ static const uint32_t I2C_CLOCK_HZ = 100000;  // conservative
 static const uint8_t  TCA_CH_TF1   = 0;
 static const uint8_t  TCA_CH_TF2   = 1;
 static const uint8_t  TCA_CH_TF3   = 2;
-static const uint8_t  TCA_CH_NAU   = 3;
+
+// HX711 load cell
+static const uint8_t  PIN_HX_DOUT  = 2;
+static const uint8_t  PIN_HX_SCK   = 3;
 
 // TF-Luna sampling
 static const uint8_t  SAMPLES_PER_SENSOR = 6;
 static const uint16_t DRDY_TIMEOUT_MS    = 50;
 
-// NAU7802
-static float          NAU_CAL_FACTOR     = 2280.0f;  // set with known mass
+// HX711 calibration factor (set with known mass)
+static float          HX_CAL_FACTOR      = 2280.0f;
 
 // Laser policy
 static const uint16_t LASER_ON_MS         = 5000;
@@ -86,7 +89,7 @@ static const char TOPIC_LOG[]  = "measure/log";
 /* --------------------------- Globals/State --------------------------- */
 
 static TFLI2C  tfl;
-static NAU7802 g_scale;
+static HX711  g_scale;
 static bool    g_scalePresent = false;
 
 static int32_t g_factoryZeroOffset = 0;  // baseline at init
@@ -237,9 +240,7 @@ static void laserLoop() {
 /* ------------------------------ I2C/TCA ------------------------------ */
 
 static bool tcaSelect(uint8_t ch) { if (ch > 7) return false; Wire.beginTransmission(TCA_ADDR); Wire.write(1<<ch); return Wire.endTransmission() == 0; }
-static bool selectNAU() { if (!g_scalePresent) return false; return tcaSelect(TCA_CH_NAU); }
-
-/* ------------------------- Non-blocking NAU -------------------------- */
+/* --------------------------- Non-blocking HX ------------------------- */
 
 struct WeightSampler {
   bool active=false, success=false;
@@ -259,20 +260,19 @@ struct WeightSampler {
     if (!active) return;
     if ((int32_t)(millis() - timeoutAt) >= 0) { active=false; success=false; logLine("[SCALE] Sampler timeout"); return; }
     if (tareBusy) return;
-    if (!selectNAU()) return;
-    if (!g_scale.available()) return;
+    if (!g_scale.is_ready()) return;
 
-    int32_t raw = g_scale.getReading();
+    int32_t raw = (int32_t)g_scale.read();
     acc += raw; count++;
     if (count >= targetN) {
       const int32_t rawAvg = (int32_t)(acc / targetN);
-      const float grossF   = (float)(rawAvg - g_factoryZeroOffset) / NAU_CAL_FACTOR;
+      const float grossF   = (float)(rawAvg - g_factoryZeroOffset) / HX_CAL_FACTOR;
       const int32_t combinedOffset = g_factoryZeroOffset + g_tareOffsetRaw;
-      const float netF    = (float)(rawAvg - combinedOffset) / NAU_CAL_FACTOR;
+      const float netF    = (float)(rawAvg - combinedOffset) / HX_CAL_FACTOR;
 
       gramsGross = lroundf(grossF);
       gramsNet   = lroundf(netF);
-      tareGrams  = lroundf((float)g_tareOffsetRaw / NAU_CAL_FACTOR);
+      tareGrams  = lroundf((float)g_tareOffsetRaw / HX_CAL_FACTOR);
 
       success = true; active = false;
       logf("[SCALE] Sampler done net=%ldg gross=%ldg tare=%ldg", gramsNet, gramsGross, tareGrams);
@@ -285,7 +285,6 @@ struct TareOp {
   bool active=false, success=false;
   uint8_t averageN=0;
   uint32_t timeoutAt=0;
-  unsigned long windowMs=0;
   bool started=false;
   void start(uint8_t n, uint16_t maxMs) {
     if (!g_scalePresent) { active=false; success=false; return; }
@@ -293,7 +292,6 @@ struct TareOp {
     active = true; success = false;
     averageN = n;
     timeoutAt = millis() + maxMs;
-    windowMs = maxMs;
     started = false;
     logf("[SCALE] Tare start N=%u window=%ums", (unsigned)averageN, (unsigned)maxMs);
   }
@@ -301,16 +299,14 @@ struct TareOp {
     if (!active) return;
     if ((int32_t)(millis() - timeoutAt) >= 0) { active=false; success=false; logLine("[SCALE] Tare timeout"); return; }
     if (started) return;
-    if (!selectNAU()) return;
-    if (!g_scale.available()) return;
+    if (!g_scale.is_ready()) return;
 
     started = true;
-    g_scale.calculateZeroOffset(averageN, windowMs);
-    const int32_t combined = g_scale.getZeroOffset();
-    g_tareOffsetRaw = combined - g_factoryZeroOffset;
-    g_scale.setZeroOffset(combined);
+    int32_t avg = (int32_t)g_scale.read_average(averageN);
+    g_tareOffsetRaw = avg - g_factoryZeroOffset;
+    g_scale.set_offset((long)(g_factoryZeroOffset + g_tareOffsetRaw));
     success = true; active = false;
-    const long tare_g = lroundf((float)g_tareOffsetRaw / NAU_CAL_FACTOR);
+    const long tare_g = lroundf((float)g_tareOffsetRaw / HX_CAL_FACTOR);
     logf("[SCALE] Tare OK, tare_g=%ld", tare_g);
   }
   bool done() const { return !active; }
@@ -465,24 +461,19 @@ void setup() {
   if (!tflInitOnCh(TCA_CH_TF2, TFLUNA_ADDR, "TF2(Height)")) logLine("[TF] WARN: TF2 init failed");
   if (!tflInitOnCh(TCA_CH_TF3, TFLUNA_ADDR, "TF3(Width)"))  logLine("[TF] WARN: TF3 init failed");
 
-  // NAU init
-  if (tcaSelect(TCA_CH_NAU) && g_scale.begin(Wire)) {
+  // HX711 init
+  g_scale.begin(PIN_HX_DOUT, PIN_HX_SCK);
+  if (g_scale.wait_ready_timeout(1000)) {
     g_scalePresent = true;
-    g_scale.setGain(NAU7802_GAIN_128);
-    g_scale.setSampleRate(NAU7802_SPS_80);
-    if (!g_scale.calibrateAFE()) logLine("[SCALE] WARN: AFE calibration failed");
-
-    uint8_t primed=0; int64_t acc=0; uint32_t until=millis()+200;
-    while ((int32_t)(millis()-until) < 0 && primed < 16) {
-      if (tcaSelect(TCA_CH_NAU) && g_scale.available()) { acc += (int32_t)g_scale.getReading(); primed++; }
-    }
-    g_factoryZeroOffset = (primed>0) ? (int32_t)(acc/primed) : 0;
+    int32_t avg = (int32_t)g_scale.read_average(16);
+    g_factoryZeroOffset = avg;
     g_tareOffsetRaw     = 0;
-    g_scale.setZeroOffset(g_factoryZeroOffset);
-    g_scale.setCalibrationFactor(NAU_CAL_FACTOR);
-    logf("[SCALE] NAU OK, factoryZero=%ld cal=%.2f", (long)g_factoryZeroOffset, NAU_CAL_FACTOR);
+    g_scale.set_offset(avg);
+    g_scale.set_scale(HX_CAL_FACTOR);
+    logf("[SCALE] HX711 OK, factoryZero=%ld cal=%.2f", (long)g_factoryZeroOffset, HX_CAL_FACTOR);
   } else {
-    g_scalePresent = false; logLine("[SCALE] NAU7802 not detected");
+    g_scalePresent = false;
+    logLine("[SCALE] HX711 not detected");
   }
 
   // WiFi up and MQTT connect
