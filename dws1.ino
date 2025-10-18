@@ -513,7 +513,7 @@ static void publishJson_any(float h,float w,float l, bool haveScale, float net_k
     strcpy(netTxt, "null"); strcpy(grossTxt, "null"); strcpy(tareTxt, "null");
   }
 
-  const char* weightTxt = grossTxt;
+  const char* weightTxt = netTxt;
 
   char payload[256];
   snprintf(payload,sizeof(payload),
