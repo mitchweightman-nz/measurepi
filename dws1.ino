@@ -69,6 +69,19 @@ static const uint16_t DRDY_TIMEOUT_MS    = 50;
 // HX711 calibration factor (set with known mass)
 static float          HX_CAL_FACTOR      = 2280.0f;
 
+// HX711 timing (10 SPS default -> 100 ms/sample) and sampler policies
+static const uint16_t HX_SAMPLE_PERIOD_MS   = 100;
+static const uint16_t HX_WEIGHT_MARGIN_MS   = 200;
+static const uint16_t HX_TARE_MARGIN_MS     = 600;
+static const uint8_t  SCALE_SAMPLE_COUNT    = 8;
+static const uint8_t  TARE_SAMPLE_COUNT     = 64;
+
+static uint16_t hxWindowMs(uint8_t samples, uint16_t marginMs) {
+  uint32_t window = (uint32_t)samples * HX_SAMPLE_PERIOD_MS + marginMs;
+  if (window > 60000) window = 60000;   // cap to fit uint16_t timeout input
+  return (uint16_t)window;
+}
+
 // Laser policy
 static const uint16_t LASER_ON_MS         = 5000;
 static const long     VARIANCE_THRESHOLD_G = 5000;
@@ -283,26 +296,30 @@ struct WeightSampler {
 
 struct TareOp {
   bool active=false, success=false;
-  uint8_t averageN=0;
+  uint8_t targetN=0, count=0;
+  int64_t acc=0;
   uint32_t timeoutAt=0;
-  bool started=false;
   void start(uint8_t n, uint16_t maxMs) {
     if (!g_scalePresent) { active=false; success=false; return; }
     if (n == 0) n = 1;
     active = true; success = false;
-    averageN = n;
+    targetN = n;
+    count = 0;
+    acc = 0;
     timeoutAt = millis() + maxMs;
-    started = false;
-    logf("[SCALE] Tare start N=%u window=%ums", (unsigned)averageN, (unsigned)maxMs);
+    logf("[SCALE] Tare start N=%u window=%ums", (unsigned)targetN, (unsigned)maxMs);
   }
   void service() {
     if (!active) return;
     if ((int32_t)(millis() - timeoutAt) >= 0) { active=false; success=false; logLine("[SCALE] Tare timeout"); return; }
-    if (started) return;
     if (!g_scale.is_ready()) return;
 
-    started = true;
-    int32_t avg = (int32_t)g_scale.read_average(averageN);
+    int32_t raw = (int32_t)g_scale.read();
+    acc += raw;
+    count++;
+    if (count < targetN) return;
+
+    int32_t avg = (int32_t)(acc / targetN);
     g_tareOffsetRaw = avg - g_factoryZeroOffset;
     g_scale.set_offset((long)(g_factoryZeroOffset + g_tareOffsetRaw));
     success = true; active = false;
@@ -565,7 +582,7 @@ static void startCapture() {
   g_pending.start(height_cm,width_cm,length_cm);
 
   if (g_scalePresent) {
-    g_ws.start(/*N=*/8, /*maxMs=*/300);
+    g_ws.start(/*N=*/SCALE_SAMPLE_COUNT, hxWindowMs(SCALE_SAMPLE_COUNT, HX_WEIGHT_MARGIN_MS));
   }
 }
 
@@ -581,7 +598,7 @@ static void startTare(bool fromMqtt) {
 
   if (fromMqtt) logLine("[MQTT] TARE requested");
   else          logLine("[TARE] Command accepted");
-  g_tare.start(/*N=*/64, /*maxMs=*/1500);
+  g_tare.start(/*N=*/TARE_SAMPLE_COUNT, hxWindowMs(TARE_SAMPLE_COUNT, HX_TARE_MARGIN_MS));
 }
 
 /* -------------------------------- Loop ------------------------------- */
