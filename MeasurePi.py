@@ -144,8 +144,13 @@ def _on_message(client, userdata, msg):
             new_measurements["weight_gross"] = _safe_float(data.get("weight_gross"))
             new_measurements["tare_g"] = _safe_int(data.get("tare_g"))
 
-            if new_measurements.get("weight") is None and new_measurements.get("weight_net") is not None:
-                new_measurements["weight"] = new_measurements["weight_net"]
+            if new_measurements.get("weight") is None:
+                gross_val = new_measurements.get("weight_gross")
+                net_val = new_measurements.get("weight_net")
+                if gross_val is not None:
+                    new_measurements["weight"] = gross_val
+                elif net_val is not None:
+                    new_measurements["weight"] = net_val
 
             with _data_lock:
                 current_measurement.clear()
