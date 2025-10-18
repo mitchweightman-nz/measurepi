@@ -1,7 +1,8 @@
 /*************************************************************
  * UNO R4 WiFi — TF-Luna x3 via TCA9548A + NAU7802 load-cell
- * MQTT + Capture Button, non-blocking scale sampler, JSON nulls,
- * deferred MQTT logging outside callback, retained CMD cleared.
+ * MQTT + Capture/Tare Buttons, non-blocking scale sampler,
+ * JSON nulls, deferred MQTT logging outside callback,
+ * retained CMD cleared, and 20x4 LCD live log display.
  *
  * Topics:
  *   In  : measure/cmd   (CAP/CAPTURE/CAPTUR, TARE/TAR/ZERO/Z)
@@ -10,10 +11,11 @@
  *   Out : measure/log   (all logs mirrored from Serial)
  *
  * Wiring:
- *   CAPTURE button to PIN 12, other side to GND (INPUT_PULLUP).
- *   TARE button to PIN 9, other side to GND (INPUT_PULLUP).
+ *   CAPTURE button -> D12 to GND (INPUT_PULLUP)
+ *   TARE button    -> D9  to GND (INPUT_PULLUP)
+ *   LCD (I²C PCF8574) on same I²C bus as TCA (auto-addr)
  *
- * Revision: V-12/10/25 01:30 (Add_Capture_Button+Shared_Trigger_Path)
+ * Revision: V-16/10/25 05:44 (Add_LCD_Log_20x4)
  *************************************************************/
 
 #include <Arduino.h>
@@ -24,6 +26,13 @@
 #include <SparkFun_Qwiic_Scale_NAU7802_Arduino_Library.h>
 #include <math.h>
 
+// -------- LCD 20x4 (hd44780_I2Cexp) --------
+#include <hd44780.h> // include hd44780 library header file
+#include <hd44780ioClass/hd44780_I2Cexp.h> // i/o expander/backpack class
+hd44780_I2Cexp lcd; // auto detect backpack and pin mappings
+static const uint8_t LCD_COLS = 20;
+static const uint8_t LCD_ROWS = 4;
+
 /* ------------------------------ Config ------------------------------ */
 
 // Buttons
@@ -31,8 +40,8 @@ static const uint8_t PIN_CAPTURE_IN = 12;     // active LOW to GND; internal PUL
 static const uint8_t PIN_TARE_IN    = 9;      // active LOW to GND; internal PULLUP enabled
 
 // Misc I/O
-static const uint8_t PIN_RESET_OUT  = 11;      // reset pulse to external I2C PCB (active LOW)
-static const uint8_t PIN_LASER_OUT  = 10;      // laser driver
+static const uint8_t PIN_RESET_OUT  = 11;     // reset pulse to external I2C PCB (active LOW)
+static const uint8_t PIN_LASER_OUT  = 10;     // laser driver
 
 // TF-Luna DRDY/RTS inputs
 static const uint8_t PIN_RTS_1 = 4;  // Length
@@ -135,6 +144,40 @@ private:
 static DebouncedButton btnCapture;
 static DebouncedButton btnTare;
 
+/* ------------------------------- LCD Log ----------------------------- */
+
+static char lcdBuf[8][LCD_COLS + 1];  // ring of last 8 lines
+static uint8_t lcdHead = 0;           // next write index
+
+static void lcdClearAll() {
+  lcd.clear();
+  for (uint8_t i = 0; i < 8; i++) { lcdBuf[i][0] = 0; }
+  lcdHead = 0;
+}
+
+static void lcdAppend(const char* s) {
+  // Copy and trim to LCD_COLS
+  char line[LCD_COLS + 1];
+  size_t n = strnlen(s, LCD_COLS);
+  memcpy(line, s, n);
+  line[n] = 0;
+
+  strncpy(lcdBuf[lcdHead], line, LCD_COLS);
+  lcdBuf[lcdHead][LCD_COLS] = 0;
+  lcdHead = (lcdHead + 1) % 8;
+
+  // Show last 4 lines
+  lcd.noBlink();
+  for (uint8_t row = 0; row < LCD_ROWS; row++) {
+    uint8_t idx = (lcdHead + 8 - (LCD_ROWS - row)) % 8;
+    lcd.setCursor(0, row);
+    // pad line to width to erase leftovers
+    char out[LCD_COLS + 1];
+    snprintf(out, sizeof(out), "%-*s", LCD_COLS, lcdBuf[idx][0] ? lcdBuf[idx] : "");
+    lcd.print(out);
+  }
+}
+
 /* ------------------------------- Utils ------------------------------- */
 
 static void _logPublish(const char* s) {
@@ -142,6 +185,7 @@ static void _logPublish(const char* s) {
 }
 static void logLine(const char* s) {
   Serial.println(s);
+  lcdAppend(s);
   if (!g_inCallback) _logPublish(s);               // never publish while in callback
   else { strncpy(g_cbLogBuf, s, sizeof(g_cbLogBuf)-1); g_cbLogBuf[sizeof(g_cbLogBuf)-1]=0; g_cbLogHas=true; }
 }
@@ -246,8 +290,7 @@ struct TareOp {
   void start(uint8_t n, uint16_t maxMs) {
     if (!g_scalePresent) { active=false; success=false; return; }
     if (n == 0) n = 1;
-    active = true;
-    success = false;
+    active = true; success = false;
     averageN = n;
     timeoutAt = millis() + maxMs;
     windowMs = maxMs;
@@ -341,6 +384,7 @@ static void mqttCallback(char* topic, byte* payload, unsigned int length) {
   char line[192];
   snprintf(line, sizeof(line), "[MQTT] RX %s: %s", topic, msg);
   Serial.println(line);
+  lcdAppend(line);                         // mirror raw RX line immediately
   strncpy(g_cbLogBuf, line, sizeof(g_cbLogBuf)-1); g_cbLogBuf[sizeof(g_cbLogBuf)-1]=0;
   g_cbLogHas = true;
 
@@ -386,19 +430,29 @@ static void mqttEnsure() {
 /* -------------------------------- Setup ------------------------------ */
 
 void setup() {
+  // I2C first so LCD can speak immediately
+  Wire.begin();
+  Wire.setClock(I2C_CLOCK_HZ);
+
+  // LCD init
+  int status = lcd.begin(LCD_COLS, LCD_ROWS);
+  if (status) {
+    // non-zero means error; still continue
+  }
+  lcd.backlight();
+  lcd.clear();
+  lcd.setCursor(0,0); lcd.print("Measure Rig Boot");
+
   Serial.begin(115200);
   while (!Serial) {}
-  logLine("# Booting measure rig…");
 
   pinMode(PIN_RESET_OUT, OUTPUT); digitalWrite(PIN_RESET_OUT, HIGH);
   pinMode(PIN_RTS_1, INPUT_PULLUP); pinMode(PIN_RTS_2, INPUT_PULLUP); pinMode(PIN_RTS_3, INPUT_PULLUP);
   btnCapture.begin(PIN_CAPTURE_IN, /*debounce ms*/30);
   btnTare.begin(PIN_TARE_IN, /*debounce ms*/30);
   laserBegin(PIN_LASER_OUT);
-  logf("[GPIO] Pins configured (CAP button on D%u, TARE button on D%u, active LOW)", PIN_CAPTURE_IN, PIN_TARE_IN);
 
-  Wire.begin();
-  Wire.setClock(I2C_CLOCK_HZ);
+  logf("[GPIO] CAP=D%u TARE=D%u; LCD %ux%u ready", PIN_CAPTURE_IN, PIN_TARE_IN, LCD_COLS, LCD_ROWS);
   logf("[I2C] Started at %lu Hz", (unsigned long)I2C_CLOCK_HZ);
 
   // TCA presence
@@ -426,9 +480,9 @@ void setup() {
     g_tareOffsetRaw     = 0;
     g_scale.setZeroOffset(g_factoryZeroOffset);
     g_scale.setCalibrationFactor(NAU_CAL_FACTOR);
-    logf("[SCALE] NAU7802 OK, factoryZero=%ld, cal=%.2f", (long)g_factoryZeroOffset, NAU_CAL_FACTOR);
+    logf("[SCALE] NAU OK, factoryZero=%ld cal=%.2f", (long)g_factoryZeroOffset, NAU_CAL_FACTOR);
   } else {
-    g_scalePresent = false; logLine("[SCALE] NAU7802 not detected: tare disabled, weights null");
+    g_scalePresent = false; logLine("[SCALE] NAU7802 not detected");
   }
 
   // WiFi up and MQTT connect
@@ -437,14 +491,14 @@ void setup() {
   while (WiFi.status() != WL_CONNECTED && millis()-wifiStart < 7000) { delay(50); }
   if (WiFi.status() == WL_CONNECTED) {
     String ip = WiFi.localIP().toString();
-    logf("[WIFI] Connected: RSSI=%d IP=%s", WiFi.RSSI(), ip.c_str());
+    logf("[WIFI] Connected RSSI=%d IP=%s", WiFi.RSSI(), ip.c_str());
   } else {
-    logLine("[WIFI] Connect timeout; will retry in background");
+    logLine("[WIFI] Connect timeout; retry bg");
   }
 
   mqttEnsure();
 
-  logLine("# Ready. CAPTURE via MQTT or button. Old retained cmds are cleared.");
+  logLine("# Ready. CAPTURE via MQTT or buttons.");
   g_nextHeartbeatMs = millis() + 200000;
 }
 
@@ -480,12 +534,12 @@ struct PendingCapture {
   bool active=false; float height_cm=NAN, width_cm=NAN, length_cm=NAN;
   void start(float h,float w,float l){
     active=true; height_cm=h; width_cm=w; length_cm=l;
-    logf("[CAPTURE] START length=%.1f height=%.1f width=%.1f", l, h, w);
+    logf("[CAPTURE] START L=%.1f H=%.1f W=%.1f", l, h, w);
   }
   void tryPublishIfReady(){
     if (!active) return;
     if (!g_scalePresent){
-      logf("[CAPTURE] DISTANCES_READY L=%.1f H=%.1f W=%.1f (cm) [NO_SCALE]", length_cm,height_cm,width_cm);
+      logf("[CAPTURE] DIST READY L=%.1f H=%.1f W=%.1f [NO_SCALE]", length_cm,height_cm,width_cm);
       publishJson_any(height_cm,width_cm,length_cm, /*haveScale=*/false, NAN,NAN,0);
       active=false; return;
     }
@@ -495,10 +549,10 @@ struct PendingCapture {
       g_lastStableWeight = g_ws.gramsNet;
       const float net_kg   = g_ws.gramsNet   / 1000.0f;
       const float gross_kg = g_ws.gramsGross / 1000.0f;
-      logf("[CAPTURE] WEIGHT_READY net=%.3fkg gross=%.3fkg tare=%ldg", net_kg,gross_kg,g_ws.tareGrams);
+      logf("[CAPTURE] WEIGHT net=%.3fkg gross=%.3fkg tare=%ldg", net_kg,gross_kg,g_ws.tareGrams);
       publishJson_any(height_cm,width_cm,length_cm, /*haveScale=*/true, net_kg,gross_kg,g_ws.tareGrams);
     } else {
-      logf("[CAPTURE] DISTANCES_READY L=%.1f H=%.1f W=%.1f (cm) [SAMPLER_FAIL]", length_cm,height_cm,width_cm);
+      logf("[CAPTURE] DIST READY L=%.1f H=%.1f W=%.1f [SAMPLER_FAIL]", length_cm,height_cm,width_cm);
       publishJson_any(height_cm,width_cm,length_cm, /*haveScale=*/false, NAN,NAN,0);
     }
     active=false;
@@ -506,7 +560,7 @@ struct PendingCapture {
 } g_pending;
 
 static void startCapture() {
-  logLine("[CAPTURE] TRIGGERED (begin TF-Luna reads)");
+  logLine("[CAPTURE] TRIGGERED");
   int16_t length_cm_i = tflAverageOnCh(TCA_CH_TF1, PIN_RTS_1, TFLUNA_ADDR); if (length_cm_i < 0) noteCommFailure();
   int16_t height_cm_i = tflAverageOnCh(TCA_CH_TF2, PIN_RTS_2, TFLUNA_ADDR); if (height_cm_i < 0) noteCommFailure();
   int16_t width_cm_i  = tflAverageOnCh(TCA_CH_TF3, PIN_RTS_3, TFLUNA_ADDR); if (width_cm_i  < 0) noteCommFailure();
@@ -515,7 +569,7 @@ static void startCapture() {
   const float height_cm = (height_cm_i >= 0) ? (float)height_cm_i : NAN;
   const float width_cm  = (width_cm_i  >= 0) ? (float)width_cm_i  : NAN;
 
-  logf("[CAPTURE] TF-Luna results raw L=%d H=%d W=%d", length_cm_i,height_cm_i,width_cm_i);
+  logf("[CAPTURE] TF raw L=%d H=%d W=%d", length_cm_i,height_cm_i,width_cm_i);
 
   g_pending.start(height_cm,width_cm,length_cm);
 
@@ -526,7 +580,7 @@ static void startCapture() {
 
 static void startTare(bool fromMqtt) {
   if (!g_scalePresent) {
-    logLine("# Tare ignored (no scale detected)");
+    logLine("# Tare ignored (no scale)");
     return;
   }
   if (g_tare.active) {
@@ -574,7 +628,7 @@ void loop() {
     g_trigCapture = false;
     logLine("[CAPTURE] Command accepted");
     if (!g_pending.active && !g_tare.active && !g_ws.active) startCapture();
-    else logLine("[CAPTURE] Ignored; capture already pending/busy");
+    else logLine("[CAPTURE] Ignored; busy");
   }
 
   if (g_trigTare) {
