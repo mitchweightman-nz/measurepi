@@ -113,7 +113,8 @@ static uint8_t  g_laserOn          = 0;
 
 // Callback-safe logging buffer
 static bool     g_inCallback       = false;
-static char     g_cbLogBuf[192];
+static const size_t LOG_LINE_MAX   = 256;
+static char     g_cbLogBuf[LOG_LINE_MAX];
 static bool     g_cbLogHas         = false;
 
 /* ------------------------------ Debounce ----------------------------- */
@@ -185,17 +186,65 @@ static void lcdAppend(const char* s) {
 
 /* ------------------------------- Utils ------------------------------- */
 
+static void formatTimestampFull(char* out, size_t len, unsigned long ms) {
+  if (!out || len == 0) return;
+  unsigned long seconds = ms / 1000UL;
+  unsigned long remainder = ms % 1000UL;
+  snprintf(out, len, "[%05lu.%03lu]", seconds, remainder);
+}
+
+static void formatTimestampShort(char* out, size_t len, unsigned long ms) {
+  if (!out || len == 0) return;
+  unsigned long totalSeconds = ms / 1000UL;
+  unsigned long minutes = totalSeconds / 60UL;
+  unsigned long seconds = totalSeconds % 60UL;
+  snprintf(out, len, "[%lu:%02lu]", minutes, seconds);
+}
+
 static void _logPublish(const char* s) {
+  if (!s || !*s) return;
   if (mqttClient.connected()) mqttClient.publish(TOPIC_LOG, s, false);
 }
+
 static void logLine(const char* s) {
-  Serial.println(s);
-  lcdAppend(s);
-  if (!g_inCallback) _logPublish(s);               // never publish while in callback
-  else { strncpy(g_cbLogBuf, s, sizeof(g_cbLogBuf)-1); g_cbLogBuf[sizeof(g_cbLogBuf)-1]=0; g_cbLogHas=true; }
+  const char* message = s ? s : "";
+  const unsigned long now = millis();
+
+  char tsFull[18];
+  char tsShort[16];
+  formatTimestampFull(tsFull, sizeof(tsFull), now);
+  formatTimestampShort(tsShort, sizeof(tsShort), now);
+
+  char serialLine[LOG_LINE_MAX];
+  if (*message) {
+    snprintf(serialLine, sizeof(serialLine), "%s %s", tsFull, message);
+  } else {
+    strncpy(serialLine, tsFull, sizeof(serialLine) - 1);
+    serialLine[sizeof(serialLine) - 1] = 0;
+  }
+
+  Serial.println(serialLine);
+
+  char lcdLine[LOG_LINE_MAX];
+  if (*message) {
+    snprintf(lcdLine, sizeof(lcdLine), "%s %s", tsShort, message);
+  } else {
+    strncpy(lcdLine, tsShort, sizeof(lcdLine) - 1);
+    lcdLine[sizeof(lcdLine) - 1] = 0;
+  }
+  lcdAppend(lcdLine);
+
+  if (!g_inCallback) {
+    _logPublish(serialLine);               // never publish while in callback
+  } else {
+    strncpy(g_cbLogBuf, serialLine, LOG_LINE_MAX - 1);
+    g_cbLogBuf[LOG_LINE_MAX - 1] = 0;
+    g_cbLogHas = true;
+  }
 }
+
 static void logf(const char* fmt, ...) {
-  char line[256];
+  char line[LOG_LINE_MAX];
   va_list ap; va_start(ap, fmt);
   vsnprintf(line, sizeof(line), fmt, ap);
   va_end(ap);
@@ -383,12 +432,9 @@ static void mqttCallback(char* topic, byte* payload, unsigned int length) {
   unsigned int n = min(length, (unsigned int)(sizeof(msg)-1));
   memcpy(msg, payload, n); msg[n] = 0;
 
-  char line[192];
+  char line[LOG_LINE_MAX];
   snprintf(line, sizeof(line), "[MQTT] RX %s: %s", topic, msg);
-  Serial.println(line);
-  lcdAppend(line);                         // mirror raw RX line immediately
-  strncpy(g_cbLogBuf, line, sizeof(g_cbLogBuf)-1); g_cbLogBuf[sizeof(g_cbLogBuf)-1]=0;
-  g_cbLogHas = true;
+  logLine(line);                         // mirror raw RX line immediately
 
   char tmp[128]; strncpy(tmp, msg, sizeof(tmp)-1); tmp[sizeof(tmp)-1]=0; strtrim(tmp);
 
