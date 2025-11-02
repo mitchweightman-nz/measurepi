@@ -432,6 +432,51 @@
     const captureFeedbackEl = document.getElementById("captureFeedback");
     const tareButtonEl = document.getElementById("tareButton");
     const tareFeedbackEl = document.getElementById("tareFeedback");
+    const manualWeightEndpoint = "/api/manual_weight";
+
+    const submitManualWeight = async (weightKg) => {
+      const response = await fetch(manualWeightEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ weight: weightKg })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        throw new Error(`Manual weight submission failed (${response.status}): ${errorText}`.trim());
+      }
+
+      return response.json().catch(() => ({ status: "accepted" }));
+    };
+
+    const promptForManualWeight = async (promptMessage = "Enter weight in kg:", defaultValue = "") => {
+      let inputValue = defaultValue;
+      while (true) {
+        const userInput = window.prompt(promptMessage, inputValue);
+        if (userInput === null) {
+          return null;
+        }
+
+        const parsed = Number.parseFloat(userInput);
+        if (!Number.isFinite(parsed) || parsed < 0) {
+          alert("Please enter a valid non-negative number (kg).");
+          inputValue = userInput;
+          continue;
+        }
+
+        return Math.round(parsed * 1000) / 1000;
+      }
+    };
+
+    const ensureManualWeightPresent = async () => {
+      const weightValue = await promptForManualWeight("Scale offline. Please enter the weight (kg):");
+      if (weightValue === null) {
+        throw new Error("Manual weight entry cancelled by user");
+      }
+
+      await submitManualWeight(weightValue);
+      return weightValue;
+    };
 
     const setLcdOverlayMessage = (message = "") => {
       if (!lcdOverlayEl) return;
@@ -615,6 +660,15 @@
       return `Wt:${num.toFixed(2)}kg`;
     };
 
+    const formatHistoryWeight = (entry) => {
+      if (!entry || typeof entry !== "object") return "--";
+      const rawWeight = entry.weight ?? entry.weight_gross ?? entry.weight_net;
+      const numeric = typeof rawWeight === "number" ? rawWeight : Number.parseFloat(rawWeight);
+      if (!Number.isFinite(numeric)) return "--";
+      const suffix = entry.manual_weight ? " (manual)" : "";
+      return `${numeric.toFixed(2)} kg${suffix}`;
+    };
+
     const renderLCD = (current, history) => {
       const latest = selectLatestMeasurement(current, history);
       if (!latest) {
@@ -649,7 +703,7 @@
               <td>${formatNumber(item.height)} cm</td>
               <td>${formatNumber(item.width)} cm</td>
               <td>${formatNumber(item.length)} cm</td>
-              <td>${item.weight !== undefined && item.weight !== null ? `${Number(item.weight).toFixed(2)} kg` : "--"}</td>
+              <td>${formatHistoryWeight(item)}</td>
             </tr>
           `;
         })
@@ -743,8 +797,24 @@
           }
 
           const data = await response.json().catch(() => ({}));
-          captureFeedbackEl.textContent = data.message || "Capture requested.";
+          const baseMessage = data.message || "Capture requested.";
+          captureFeedbackEl.textContent = baseMessage;
           captureFeedbackEl.classList.add("success");
+
+          if (data?.manual_weight_required) {
+            try {
+              const manualWeight = await ensureManualWeightPresent();
+              captureFeedbackEl.textContent = `${baseMessage} Manual weight ${manualWeight.toFixed(3)} kg recorded.`;
+              captureFeedbackEl.classList.remove("error");
+              captureFeedbackEl.classList.add("success");
+              refreshDashboard();
+            } catch (manualError) {
+              console.warn("Manual weight entry cancelled or failed", manualError);
+              captureFeedbackEl.textContent = `${baseMessage} Manual weight entry required.`;
+              captureFeedbackEl.classList.remove("success");
+              captureFeedbackEl.classList.add("error");
+            }
+          }
         } catch (error) {
           console.error("Capture trigger failed", error);
           captureFeedbackEl.textContent = "Unable to trigger capture.";

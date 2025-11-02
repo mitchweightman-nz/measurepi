@@ -23,6 +23,94 @@
   const MQTT_PAYLOAD = "CAPTURE";
   const MQTT_JS_URL = "https://unpkg.com/mqtt/dist/mqtt.min.js";
 
+  const jsonEndpointUrl = new URL(JSON_URL, window.location.href);
+
+  function resolveApiUrl(path) {
+    const base = new URL(jsonEndpointUrl.href);
+    const cleanedBaseSegments = base.pathname.split("/").filter(Boolean);
+    if (cleanedBaseSegments.length && cleanedBaseSegments[cleanedBaseSegments.length - 1].toLowerCase() === "json") {
+      cleanedBaseSegments.pop();
+    }
+    const requestedSegments = String(path || "").split("/").filter(Boolean);
+    const combined = cleanedBaseSegments.concat(requestedSegments);
+    base.pathname = combined.length ? `/${combined.join("/")}` : "/";
+    return base.toString();
+  }
+
+  const MANUAL_WEIGHT_URL = resolveApiUrl("api/manual_weight");
+
+  const promptForManualWeight = async (message = "Scale offline. Enter weight in kg:") => {
+    let lastValue = "";
+    while (true) {
+      const response = window.prompt(message, lastValue);
+      if (response === null) {
+        return null;
+      }
+
+      const parsed = Number.parseFloat(response);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        alert("Please enter a valid non-negative number for weight (kg).");
+        lastValue = response;
+        continue;
+      }
+
+      return Math.round(parsed * 1000) / 1000;
+    }
+  };
+
+  async function submitManualWeight(weightKg) {
+    const body = JSON.stringify({ weight: weightKg });
+    const response = await fetch(MANUAL_WEIGHT_URL, {
+      method: "POST",
+      mode: "cors",
+      headers: { "Content-Type": "application/json" },
+      body
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      throw new Error(`Manual weight API error (${response.status}): ${errorText}`.trim());
+    }
+
+    return response.json().catch(() => ({ status: "accepted" }));
+  }
+
+  const needsManualWeight = (data) => {
+    if (!data || typeof data !== "object") return false;
+    if (data.manual_weight_required === true) return true;
+    if (data.scale_present === false) {
+      const w = Number.parseFloat(data.weight ?? data.weight_gross ?? data.weight_net);
+      if (!Number.isFinite(w)) return true;
+    }
+    const weightValue = Number.parseFloat(data.weight ?? data.weight_gross ?? data.weight_net);
+    return !Number.isFinite(weightValue);
+  };
+
+  async function ensureManualWeight(data) {
+    if (!needsManualWeight(data)) {
+      return data;
+    }
+
+    const manualWeight = await promptForManualWeight();
+    if (manualWeight === null) {
+      throw new Error("Manual weight entry cancelled by user");
+    }
+
+    try {
+      await submitManualWeight(manualWeight);
+    } catch (err) {
+      console.warn("[GSS][ManualWeight] Submission failed", err);
+    }
+
+    const normalized = Number.parseFloat(manualWeight.toFixed(3));
+    data.weight = normalized;
+    data.weight_net = normalized;
+    data.weight_gross = normalized;
+    data.manual_weight = true;
+    data.manual_weight_required = false;
+    return data;
+  }
+
   // ---------- UI creation ----------
   function createFixedFetchButton() {
     const id = "gss-fetch";
@@ -211,6 +299,14 @@
         alert("Invalid data received. Check your API response.");
         return;
       }
+
+      try {
+        await ensureManualWeight(data);
+      } catch (manualErr) {
+        console.warn("[GSS][ManualWeight] Cancelled or failed", manualErr);
+        alert("Manual weight entry is required to continue.");
+        return;
+      }
       autoFillNextAvailableRow(data);
     } catch (err) {
       console.error("[GSS][Fetch] Error:", err);
@@ -231,6 +327,13 @@
           if (resp.ok) {
             const data = await resp.json();
             if (isValidPayload(data)) {
+              try {
+                await ensureManualWeight(data);
+              } catch (manualErr) {
+                console.warn("[GSS][ManualWeight] Cancelled or failed", manualErr);
+                alert("Manual weight entry is required to continue.");
+                return;
+              }
               console.log(`[GSS][Measure] Got data after ${tries} poll(s):`, data);
               autoFillNextAvailableRow(data);
               return;
