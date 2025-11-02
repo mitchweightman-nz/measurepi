@@ -369,9 +369,13 @@ struct TareOp {
 
 /* ----------------------------- TF-Luna ------------------------------- */
 
-static bool waitRTSHigh(uint8_t pin, uint16_t timeout_ms) {
+static bool waitRTSReady(uint8_t pin, uint16_t timeout_ms) {
+  // TF-Luna RTS/DRDY is active-LOW: the line is pulled LOW when new data is
+  // available. The previous implementation waited for the line to return HIGH,
+  // which meant we would sit in this loop until a timeout whenever the sensor
+  // had data ready. The capture routine would therefore return no measurements.
   uint32_t start = millis();
-  while (digitalRead(pin) == LOW) {
+  while (digitalRead(pin) == HIGH) {
     if ((uint16_t)(millis() - start) >= timeout_ms) return false;
     delayMicroseconds(500);
   }
@@ -389,7 +393,7 @@ static bool tflInitOnCh(uint8_t ch, uint8_t addr, const char* name) {
   logf("[TF] %s: init OK on ch %u addr 0x%02X", name, ch, addr); return true;
 }
 static int16_t tflReadOnceDRDY(uint8_t addr, uint8_t rtsPin) {
-  if (!waitRTSHigh(rtsPin, DRDY_TIMEOUT_MS)) { int16_t dump=0; tfl.getData(dump, addr); return -1; }
+  if (!waitRTSReady(rtsPin, DRDY_TIMEOUT_MS)) { int16_t dump=0; tfl.getData(dump, addr); return -1; }
   int16_t cm=-1; if (tfl.getData(cm, addr)) return cm; return -1;
 }
 static int16_t tflAverageOnCh(uint8_t ch, uint8_t rtsPin, uint8_t addr) {
