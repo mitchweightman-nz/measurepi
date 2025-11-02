@@ -300,7 +300,7 @@ def _apply_rounding(measurements: dict) -> dict:
 
     for key, value in measurements.items():
         if key not in ["height", "width", "length"] or not isinstance(value, (int, float)):
-            continue 
+            continue
 
         rule = rounding_settings.get(key)
         try:
@@ -309,15 +309,15 @@ def _apply_rounding(measurements: dict) -> dict:
             elif rule == "floor":
                 rounded_measurements[key] = math.floor(value)
             elif rule == "none" or rule is None:
-                rounded_measurements[key] = round(value, 1) 
+                rounded_measurements[key] = float(value)
             elif isinstance(rule, str) and rule.isdigit():
                 precision = int(rule)
                 rounded_measurements[key] = round(value, precision)
-            else: 
-                rounded_measurements[key] = round(value, 1) 
+            else:
+                rounded_measurements[key] = round(value, 1)
         except Exception as e:
             print(f"[ROUNDING] Error applying rule '{rule}' for key '{key}', value '{value}': {e}")
-            rounded_measurements[key] = round(value, 1) 
+            rounded_measurements[key] = round(value, 1)
 
     return rounded_measurements
 
@@ -479,10 +479,16 @@ def manual_weight_api_route():
         return jsonify({"error": "Request must be JSON"}), 400
 
     payload = request.get_json()
+    if not isinstance(payload, dict):
+        return jsonify({"error": "JSON payload must be an object"}), 400
+
     manual_weight_value = _safe_float(payload.get("weight"))
 
     if manual_weight_value is None:
         return jsonify({"error": "A numeric 'weight' value (kg) is required"}), 400
+
+    if manual_weight_value < 0:
+        return jsonify({"error": "Weight must be zero or greater"}), 400
 
     manual_weight_value = float(manual_weight_value)
     manual_weight_value = round(manual_weight_value, 3)
