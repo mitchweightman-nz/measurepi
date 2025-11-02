@@ -247,9 +247,9 @@
     mqttLoading = true;
     return new Promise((resolve, reject) => {
       const s = document.createElement('script');
-      s.src = "https://unpkg.com/mqtt/dist/mqtt.min.js";
-      s.onload = () => resolve();
-      s.onerror = () => reject(new Error("Failed to load mqtt.min.js"));
+      s.src = MQTT_JS_URL;
+      s.onload = () => { mqttLoading = false; resolve(); };
+      s.onerror = () => { mqttLoading = false; reject(new Error("Failed to load mqtt.min.js")); };
       document.head.appendChild(s);
     });
   }
