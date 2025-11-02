@@ -58,12 +58,19 @@ current_measurement = {}
 measurement_history = []
 raw_mqtt_history = []
 measure_log_history = []
-_data_lock = threading.Lock()  
-_last_lcd_text = ""       
+_data_lock = threading.Lock()
+_last_lcd_text = ""
 
 rounding_settings = DEFAULT_ROUNDING_SETTINGS.copy()
 
 mqtt_client = mqtt.Client(client_id=f"measure_pi_client_{os.getpid()}", protocol=mqtt.MQTTv311)
+
+# Track whether the external scale is available and if manual weight input
+# is pending. These values are updated as MQTT payloads arrive and when
+# manual weight overrides are submitted via the API.
+scale_present_flag = None  # None = unknown, True = scale detected, False = no scale
+awaiting_manual_weight = False
+pending_manual_weight_value = None
 
 
 # ─── MQTT Callbacks ──────────────────────────────────────────────────────────
@@ -119,7 +126,7 @@ def _safe_int(value):
 
 
 def _on_message(client, userdata, msg):
-    global _last_lcd_text
+    global _last_lcd_text, scale_present_flag, pending_manual_weight_value, awaiting_manual_weight
     # print(f"[MQTT] Received message on topic '{msg.topic}': {msg.payload.decode()}")
 
     if msg.topic == MQTT_TOPIC_SUB:
@@ -151,6 +158,31 @@ def _on_message(client, userdata, msg):
                     new_measurements["weight"] = gross_val
                 elif net_val is not None:
                     new_measurements["weight"] = net_val
+
+            have_scale = any(
+                new_measurements.get(key) is not None
+                for key in ("weight", "weight_net", "weight_gross", "tare_g")
+            )
+            new_measurements["scale_present"] = have_scale
+
+            if not have_scale:
+                new_measurements["manual_weight_required"] = True
+                manual_override = pending_manual_weight_value
+                if isinstance(manual_override, (int, float)):
+                    manual_value = float(manual_override)
+                    new_measurements["weight"] = manual_value
+                    new_measurements["weight_net"] = manual_value
+                    new_measurements["weight_gross"] = manual_value
+                    new_measurements["manual_weight"] = True
+                    new_measurements["manual_weight_timestamp"] = time.time()
+                    pending_manual_weight_value = None
+                    awaiting_manual_weight = False
+            else:
+                new_measurements["manual_weight_required"] = False
+                pending_manual_weight_value = None
+                awaiting_manual_weight = False
+
+            scale_present_flag = have_scale
 
             with _data_lock:
                 current_measurement.clear()
@@ -315,6 +347,10 @@ def json_data_route():
         tare_value = current_data_copy.get("tare_g")
         current_rounded["tare_g"] = int(tare_value) if isinstance(tare_value, (int, float)) else None
 
+    for meta_key in ["scale_present", "manual_weight_required", "manual_weight", "manual_weight_timestamp"]:
+        if meta_key in current_data_copy:
+            current_rounded[meta_key] = current_data_copy[meta_key]
+
     return jsonify({"current": current_rounded, "history": history_to_send})
 
 @app.route("/api/raw")
@@ -406,13 +442,92 @@ def command_api_route():
 
 @app.route("/api/capture", methods=["POST"])
 def capture_api_route():
+    global awaiting_manual_weight
+
+    with _data_lock:
+        current_scale_state = scale_present_flag
+        if current_scale_state is False:
+            awaiting_manual_weight = True
+        else:
+            awaiting_manual_weight = False
+
     if mqtt_client.is_connected():
         mqtt_client.publish(MQTT_CAPTURE_TOPIC, "CAP")
         print(f"[API-CAPTURE] Capture command published to MQTT topic '{MQTT_CAPTURE_TOPIC}'.")
-        return jsonify({"status": "sent", "message": "Capture requested."})
+
+        response_payload = {
+            "status": "sent",
+            "message": "Capture requested.",
+            "scale_present": current_scale_state,
+            "manual_weight_required": current_scale_state is False,
+        }
+
+        if current_scale_state is False:
+            response_payload["message"] = "Capture requested. Scale offline – please enter weight manually."
+
+        return jsonify(response_payload)
     else:
         print("[API-CAPTURE] Failed to publish capture command: MQTT client not connected.")
         return jsonify({"status": "error", "message": "MQTT client not connected"}), 503
+
+
+@app.route("/api/manual_weight", methods=["POST"])
+def manual_weight_api_route():
+    global pending_manual_weight_value, awaiting_manual_weight, scale_present_flag
+
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
+
+    payload = request.get_json()
+    manual_weight_value = _safe_float(payload.get("weight"))
+
+    if manual_weight_value is None:
+        return jsonify({"error": "A numeric 'weight' value (kg) is required"}), 400
+
+    manual_weight_value = float(manual_weight_value)
+    manual_weight_value = round(manual_weight_value, 3)
+    timestamp = time.time()
+    applied_immediately = False
+
+    with _data_lock:
+        pending_manual_weight_value = manual_weight_value
+        awaiting_manual_weight = False
+
+        if current_measurement:
+            current_weight = current_measurement.get("weight")
+            if not isinstance(current_weight, (int, float)):
+                current_measurement["weight"] = manual_weight_value
+                current_measurement["weight_net"] = manual_weight_value
+                current_measurement["weight_gross"] = manual_weight_value
+                current_measurement["manual_weight"] = True
+                current_measurement["manual_weight_timestamp"] = timestamp
+                current_measurement["manual_weight_required"] = False
+                current_measurement["scale_present"] = False
+                applied_immediately = True
+
+        if measurement_history:
+            last_entry = measurement_history[-1]
+            last_weight = last_entry.get("weight") if isinstance(last_entry, dict) else None
+            if not isinstance(last_weight, (int, float)):
+                last_entry["weight"] = manual_weight_value
+                last_entry["weight_net"] = manual_weight_value
+                last_entry["weight_gross"] = manual_weight_value
+                last_entry["manual_weight"] = True
+                last_entry["manual_weight_timestamp"] = timestamp
+                last_entry["manual_weight_required"] = False
+                last_entry["scale_present"] = False
+                applied_immediately = True
+
+        if applied_immediately:
+            pending_manual_weight_value = None
+            scale_present_flag = False
+
+    print(f"[MANUAL-WEIGHT] {'Applied' if applied_immediately else 'Stored'} manual weight {manual_weight_value:.3f}kg")
+    return jsonify({
+        "status": "accepted",
+        "applied": applied_immediately,
+        "weight": manual_weight_value,
+    })
 
 # ─── Main Application Logic ───────────────────────────────────────────────────
 def run_application():
