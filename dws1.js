@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GoSweetSpot Auto-Fill + Measure (Next Available Row)
 // @namespace    http://tampermonkey.net/
-// @version      V-05/10/25 20:45
-// @description  Trigger measurement via MQTT and auto-fill the next available row in GoSweetSpot
+// @version      V-22/11/25 21:10-WS
+// @description  Trigger measurement via MeasurePi and auto-fill the next available row in GoSweetSpot
 // @match        https://nzc.gosweetspot.com/ship
 // @grant        none
 // ==/UserScript==
@@ -10,35 +10,20 @@
 (function () {
   'use strict';
 
-  console.log("[GSS] Script running...");
+  console.log("[GSS] Script running (WebSocket mode)...");
 
   // ---------- Config ----------
-  const JSON_URL = "https://nzc.redlite.nz:8443/";  // your JSON endpoint
-  const POLL_TIMEOUT_MS = 7000;                     // max wait for fresh data after CAPTURE
-  const POLL_INTERVAL_MS = 400;
+  const API_BASE = "https://nzc.redlite.nz:9001/";        // MeasurePi Flask base
+  const WS_URL   = "wss://nzc.redlite.nz:9001/ws";        // MeasurePi WebSocket
 
-  // MQTT over WebSocket (set to your broker's WS/WSS endpoint)
-  const MQTT_WS_URL = "wss://nzc.redlite.nz:9001";  // e.g., mosquitto websockets
-  const MQTT_TOPIC_CMD = "measure/cmd";
-  const MQTT_PAYLOAD = "CAPTURE";
-  const MQTT_JS_URL = "https://unpkg.com/mqtt/dist/mqtt.min.js";
+  const JSON_URL          = API_BASE + "json";            // returns { current: {...}, history: [...] }
+  const CAPTURE_URL       = API_BASE + "api/capture";     // triggers CAP to UNO via MQTT
+  const MANUAL_WEIGHT_URL = API_BASE + "api/manual_weight";
 
-  const jsonEndpointUrl = new URL(JSON_URL, window.location.href);
+  const POLL_TIMEOUT_MS   = 7000;   // max wait for fresh data after CAPTURE
+  const POLL_INTERVAL_MS  = 400;    // HTTP poll interval (fallback if WS fails)
 
-  function resolveApiUrl(path) {
-    const base = new URL(jsonEndpointUrl.href);
-    const cleanedBaseSegments = base.pathname.split("/").filter(Boolean);
-    if (cleanedBaseSegments.length && cleanedBaseSegments[cleanedBaseSegments.length - 1].toLowerCase() === "json") {
-      cleanedBaseSegments.pop();
-    }
-    const requestedSegments = String(path || "").split("/").filter(Boolean);
-    const combined = cleanedBaseSegments.concat(requestedSegments);
-    base.pathname = combined.length ? `/${combined.join("/")}` : "/";
-    return base.toString();
-  }
-
-  const MANUAL_WEIGHT_URL = resolveApiUrl("api/manual_weight");
-
+  // ---------- Manual weight helpers ----------
   const promptForManualWeight = async (message = "Scale offline. Enter weight in kg:") => {
     let lastValue = "";
     while (true) {
@@ -111,6 +96,68 @@
     return data;
   }
 
+  // ---------- WebSocket: keep latest measurement in memory ----------
+  let ws = null;
+  let wsConnected = false;
+  let latestMeasurement = null;
+  let latestMeasurementTimestamp = 0;  // seconds since epoch (server timestamp if available)
+
+  function connectWebSocket() {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+
+    console.log("[MeasureWS] Connecting to", WS_URL);
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+      wsConnected = true;
+      console.log("[MeasureWS] connected");
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg && msg.type === "current_measurement" && msg.data) {
+          const d = msg.data;
+          const ts = typeof msg.timestamp === "number"
+            ? msg.timestamp
+            : (typeof d.timestamp === "number" ? d.timestamp : (Date.now() / 1000));
+
+          latestMeasurement = d;
+          latestMeasurementTimestamp = ts;
+          // console.log("[MeasureWS] measurement:", d);
+        }
+      } catch (e) {
+        console.error("[MeasureWS] parse error:", e, event.data);
+      }
+    };
+
+    ws.onclose = () => {
+      wsConnected = false;
+      console.log("[MeasureWS] closed, retrying in 2s");
+      setTimeout(connectWebSocket, 2000);
+    };
+
+    ws.onerror = (err) => {
+      console.error("[MeasureWS] error", err);
+      // let onclose handle reconnect
+    };
+  }
+
+  async function waitForNewMeasurement(prevTimestamp, timeoutMs) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (latestMeasurement && latestMeasurementTimestamp) {
+        if (!prevTimestamp || latestMeasurementTimestamp > prevTimestamp) {
+          return { ...latestMeasurement }; // shallow copy
+        }
+      }
+      await sleep(200);
+    }
+    return null;
+  }
+
   // ---------- UI creation ----------
   function createFixedFetchButton() {
     const id = "gss-fetch";
@@ -133,14 +180,12 @@
       cursor: "pointer",
       boxShadow: "0 2px 5px rgba(0,0,0,0.3)"
     });
-    // FIX: use block bodies so arrow function doesn't return an assignment
     btn.addEventListener("mouseenter", () => { btn.style.background = "#0056b3"; });
     btn.addEventListener("mouseleave", () => { btn.style.background = "#007bff"; });
     btn.addEventListener("click", fetchData);
     document.body.appendChild(btn);
   }
 
-  // Insert MEASURE button into the target panel heading
   async function createMeasureButtonInPanel() {
     const id = "gss-measure";
     if (document.getElementById(id)) return;
@@ -156,13 +201,12 @@
     btn.id = id;
     btn.type = "button";
     btn.innerText = "Measure";
-    // Use existing site styles if present
     btn.className = "btn btn-primary btn-sm";
     Object.assign(btn.style, {
       marginLeft: "8px",
       float: "right"
     });
-    btn.addEventListener("click", measureThenFetch);
+    btn.addEventListener("click", fetchData);
 
     try {
       target.appendChild(btn);
@@ -199,14 +243,12 @@
       cursor: "pointer",
       boxShadow: "0 2px 5px rgba(0,0,0,0.3)"
     });
-    // FIX: same ESLint-safe handlers here
     btn.addEventListener("mouseenter", () => { btn.style.background = "#218838"; });
     btn.addEventListener("mouseleave", () => { btn.style.background = "#28a745"; });
     btn.addEventListener("click", measureThenFetch);
     document.body.appendChild(btn);
   }
 
-  // Wait for the specific panel heading you provided
   function waitForPanelHeading(timeoutMs = 8000) {
     const cssSel = "#accordionpackages > div > div.panel-heading";
     const xSel = '/html/body/div[1]/div[2]/div/div[5]/div[2]/div[2]/div/div[1]';
@@ -231,73 +273,50 @@
     });
   }
 
-  // ---------- MQTT (browser) ----------
-  let mqttClient = null;
-  let mqttReady = false;
-  let mqttLoading = false;
-
-  function loadMqttJs() {
-    if (window.mqtt) return Promise.resolve();
-    if (mqttLoading) {
-      return new Promise((res, rej) => {
-        const iv = setInterval(() => { if (window.mqtt) { clearInterval(iv); res(); } }, 100);
-        setTimeout(() => rej(new Error("mqtt.js load timeout")), 6000);
-      });
+  // ---------- Payload helpers ----------
+  function extractMeasurementFromPayload(payload) {
+    if (!payload || typeof payload !== "object") return null;
+    if (payload.current && typeof payload.current === "object") {
+      return payload.current;
     }
-    mqttLoading = true;
-    return new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = MQTT_JS_URL;
-      s.onload = () => { mqttLoading = false; resolve(); };
-      s.onerror = () => { mqttLoading = false; reject(new Error("Failed to load mqtt.min.js")); };
-      document.head.appendChild(s);
-    });
+    return payload;
   }
 
-  async function ensureMqtt() {
-    if (mqttReady && mqttClient) return mqttClient;
-    await loadMqttJs();
-
-    return new Promise((resolve, reject) => {
-      try {
-        new URL(MQTT_WS_URL);
-        mqttClient = window.mqtt.connect(MQTT_WS_URL, {
-          clientId: "vm-gss-" + Math.random().toString(36).slice(2, 8),
-          clean: true,
-          connectTimeout: 5000,
-          reconnectPeriod: 2000
-        });
-        mqttClient.on('connect', () => { console.log("[GSS][MQTT] connected"); mqttReady = true; resolve(mqttClient); });
-        mqttClient.on('error', (e) => console.error("[GSS][MQTT] error:", e?.message || e));
-        mqttClient.on('reconnect', () => console.log("[GSS][MQTT] reconnecting..."));
-        mqttClient.on('close', () => { console.log("[GSS][MQTT] closed"); mqttReady = false; });
-      } catch (e) { reject(e); }
-    });
+  function isValidPayload(data) {
+    if (typeof data !== "object" || data == null) return false;
+    const okNum = v => v !== null && v !== "" && isFinite(+v);
+    return okNum(data.length) && okNum(data.width) && okNum(data.height);
   }
 
-  async function publishCapture() {
-    const client = await ensureMqtt();
-    return new Promise((resolve, reject) => {
-      client.publish(MQTT_TOPIC_CMD, MQTT_PAYLOAD, { qos: 0, retain: false }, (err) => {
-        if (err) { console.error("[GSS][MQTT] publish failed:", err); reject(err); }
-        else { console.log("[GSS][MQTT] CAPTURE sent"); resolve(); }
-      });
-    });
-  }
+  function sleep(ms) { return new Promise(res => setTimeout(res, ms)); }
 
   // ---------- Fetch + Fill ----------
   async function fetchData() {
-    console.log("[GSS][Fetch] Requesting JSON data...");
-    try {
-      const response = await fetch(JSON_URL, { method: "GET", mode: "cors", headers: { "Accept": "application/json" } });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      console.log("[GSS][Fetch] JSON:", data);
+    console.log("[GSS][Fetch] Requesting data...");
 
-      if (!isValidPayload(data)) {
-        console.error("[GSS][Fetch] Invalid JSON format:", data);
-        alert("Invalid data received. Check your API response.");
-        return;
+    try {
+      let data = null;
+
+      // Prefer last WebSocket measurement if available
+      if (latestMeasurement && isValidPayload(latestMeasurement)) {
+        data = { ...latestMeasurement };
+        console.log("[GSS][Fetch] Using WS measurement:", data);
+      } else {
+        const response = await fetch(JSON_URL, {
+          method: "GET",
+          mode: "cors",
+          headers: { "Accept": "application/json" }
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const m = extractMeasurementFromPayload(payload);
+        if (!isValidPayload(m)) {
+          console.error("[GSS][Fetch] Invalid JSON format:", payload);
+          alert("Invalid data received. Check your API response.");
+          return;
+        }
+        data = m;
+        console.log("[GSS][Fetch] HTTP measurement:", data);
       }
 
       try {
@@ -310,52 +329,88 @@
       autoFillNextAvailableRow(data);
     } catch (err) {
       console.error("[GSS][Fetch] Error:", err);
-      alert("Failed to fetch data. If self-signed, open the JSON URL once and accept the cert.");
+      alert("Failed to fetch data. If using self-signed cert, open the API URL once and accept the certificate.");
     }
   }
 
   async function measureThenFetch() {
-    try {
-      await publishCapture();
+    console.log("[GSS][Measure] Triggering capture...");
+    const prevTs = latestMeasurementTimestamp || 0;
 
-      const started = Date.now();
-      let tries = 0;
-      while (Date.now() - started < POLL_TIMEOUT_MS) {
-        tries++;
-        try {
-          const resp = await fetch(JSON_URL, { method: "GET", mode: "cors", headers: { "Accept": "application/json" }, cache: "no-store" });
-          if (resp.ok) {
-            const data = await resp.json();
-            if (isValidPayload(data)) {
-              try {
-                await ensureManualWeight(data);
-              } catch (manualErr) {
-                console.warn("[GSS][ManualWeight] Cancelled or failed", manualErr);
-                alert("Manual weight entry is required to continue.");
-                return;
-              }
-              console.log(`[GSS][Measure] Got data after ${tries} poll(s):`, data);
-              autoFillNextAvailableRow(data);
-              return;
-            }
-          }
-        } catch (_) { /* ignore transient poll errors */ }
-        await sleep(POLL_INTERVAL_MS);
+    try {
+      // Trigger capture via MeasurePi API (which publishes CAP to MQTT)
+      const capResp = await fetch(CAPTURE_URL, {
+        method: "POST",
+        mode: "cors",
+        headers: { "Accept": "application/json" }
+      });
+
+      if (!capResp.ok) {
+        const text = await capResp.text().catch(() => "");
+        throw new Error(`Capture API error (${capResp.status}): ${text}`);
       }
-      alert("Timed out waiting for measurement JSON.");
+
+      const capJson = await capResp.json().catch(() => ({}));
+      console.log("[GSS][Measure] Capture response:", capJson);
+
+      // Try WebSocket-first: wait for a *new* measurement
+      let data = null;
+      if (wsConnected) {
+        data = await waitForNewMeasurement(prevTs, POLL_TIMEOUT_MS);
+        if (data && isValidPayload(data)) {
+          console.log("[GSS][Measure] Got WS measurement:", data);
+        }
+      }
+
+      // Fallback: HTTP polling on /json
+      if (!data || !isValidPayload(data)) {
+        console.log("[GSS][Measure] WS wait failed or invalid; falling back to HTTP poll.");
+        const started = Date.now();
+        let tries = 0;
+        while (Date.now() - started < POLL_TIMEOUT_MS) {
+          tries++;
+          try {
+            const resp = await fetch(JSON_URL, {
+              method: "GET",
+              mode: "cors",
+              headers: { "Accept": "application/json" },
+              cache: "no-store"
+            });
+            if (resp.ok) {
+              const payload = await resp.json();
+              const m = extractMeasurementFromPayload(payload);
+              if (isValidPayload(m)) {
+                data = m;
+                console.log(`[GSS][Measure] Got HTTP data after ${tries} poll(s):`, data);
+                break;
+              }
+            }
+          } catch {
+            // ignore transient errors
+          }
+          await sleep(POLL_INTERVAL_MS);
+        }
+      }
+
+      if (!data || !isValidPayload(data)) {
+        alert("Timed out waiting for measurement data.");
+        return;
+      }
+
+      try {
+        await ensureManualWeight(data);
+      } catch (manualErr) {
+        console.warn("[GSS][ManualWeight] Cancelled or failed", manualErr);
+        alert("Manual weight entry is required to continue.");
+        return;
+      }
+
+      autoFillNextAvailableRow(data);
     } catch (err) {
       console.error("[GSS][Measure] Failed:", err);
-      alert("Could not trigger measurement. Check MQTT WS URL and broker.");
+      alert("Could not trigger measurement. Check MeasurePi API and WebSocket connectivity.");
     }
   }
-
-  function isValidPayload(data) {
-    if (typeof data !== "object" || data == null) return false;
-    const okNum = v => v !== null && v !== "" && isFinite(+v);
-    return okNum(data.length) && okNum(data.width) && okNum(data.height);
-  }
-
-  function sleep(ms) { return new Promise(res => setTimeout(res, ms)); }
 
   function autoFillNextAvailableRow(data) {
     const nextRowNumber = findNextEmptyRow();
@@ -397,7 +452,8 @@
     return -1;
   }
 
-  // Init
-  createFixedFetchButton();      // keep the Fetch button as a floating fallback
-  createMeasureButtonInPanel();  // put MEASURE in your requested panel heading
+  // ---------- Init ----------
+  connectWebSocket();
+  createFixedFetchButton();      // floating Fetch button
+  createMeasureButtonInPanel();  // MEASURE in panel heading
 })();
