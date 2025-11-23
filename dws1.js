@@ -186,91 +186,48 @@
     document.body.appendChild(btn);
   }
 
-  async function createMeasureButtonInPanel() {
-    const id = "gss-measure";
-    if (document.getElementById(id)) return;
+  function injectMeasureButtonIntoRow(row) {
+    const rowNum = row?.getAttribute?.("data-row");
+    if (!rowNum) return;
+    if (row.querySelector('.gss-measure-row-btn')) return;
 
-    const target = await waitForPanelHeading();
-    if (!target) {
-      console.warn("[GSS] Panel heading not found; falling back to fixed-position MEASURE button.");
-      createFallbackMeasureButton();
-      return;
+    let cell = row.querySelector('td:last-child');
+    if (!cell) {
+      cell = document.createElement('td');
+      row.appendChild(cell);
     }
 
     const btn = document.createElement("button");
-    btn.id = id;
     btn.type = "button";
     btn.innerText = "Measure";
-    btn.className = "btn btn-primary btn-sm";
+    btn.className = "btn btn-primary btn-sm gss-measure-row-btn";
     Object.assign(btn.style, {
       marginLeft: "8px",
       float: "right"
     });
-    btn.addEventListener("click", fetchData);
+    btn.addEventListener("click", () => measureThenFetch(rowNum));
 
-    try {
-      target.appendChild(btn);
-    } catch {
-      const wrap = document.createElement("div");
-      wrap.style.display = "flex";
-      wrap.style.alignItems = "center";
-      wrap.style.justifyContent = "space-between";
-      while (target.firstChild) wrap.appendChild(target.firstChild);
-      target.appendChild(wrap);
-      wrap.appendChild(btn);
-    }
-
-    console.log("[GSS] MEASURE button inserted into panel heading.");
+    cell.appendChild(btn);
   }
 
-  function createFallbackMeasureButton() {
-    const id = "gss-measure";
-    if (document.getElementById(id)) return;
-    const btn = document.createElement("button");
-    btn.id = id;
-    btn.innerText = "Measure";
-    Object.assign(btn.style, {
-      position: "fixed",
-      top: "10px",
-      right: "120px",
-      zIndex: "1000",
-      padding: "10px 14px",
-      fontSize: "14px",
-      background: "#28a745",
-      color: "#fff",
-      border: "1px solid #1e7e34",
-      borderRadius: "5px",
-      cursor: "pointer",
-      boxShadow: "0 2px 5px rgba(0,0,0,0.3)"
-    });
-    btn.addEventListener("mouseenter", () => { btn.style.background = "#218838"; });
-    btn.addEventListener("mouseleave", () => { btn.style.background = "#28a745"; });
-    btn.addEventListener("click", measureThenFetch);
-    document.body.appendChild(btn);
-  }
+  function createMeasureButtonsForRows() {
+    const rows = document.querySelectorAll('tr[data-row]');
+    rows.forEach(injectMeasureButtonIntoRow);
 
-  function waitForPanelHeading(timeoutMs = 8000) {
-    const cssSel = "#accordionpackages > div > div.panel-heading";
-    const xSel = '/html/body/div[1]/div[2]/div/div[5]/div[2]/div[2]/div/div[1]';
-
-    return new Promise(resolve => {
-      const t0 = Date.now();
-
-      const tryFind = () => {
-        let el = document.querySelector(cssSel);
-        if (!el) {
-          try {
-            const res = document.evaluate(xSel, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-            el = res.singleNodeValue;
-          } catch {/* ignore */}
+    const observer = new MutationObserver(mutations => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (!(node instanceof HTMLElement)) continue;
+          if (node.matches('tr[data-row]')) {
+            injectMeasureButtonIntoRow(node);
+          } else {
+            node.querySelectorAll?.('tr[data-row]').forEach(injectMeasureButtonIntoRow);
+          }
         }
-        if (el) return resolve(el);
-        if (Date.now() - t0 > timeoutMs) return resolve(null);
-        setTimeout(tryFind, 150);
-      };
-
-      tryFind();
+      }
     });
+
+    observer.observe(document.body, { childList: true, subtree: true });
   }
 
   // ---------- Payload helpers ----------
@@ -291,7 +248,7 @@
   function sleep(ms) { return new Promise(res => setTimeout(res, ms)); }
 
   // ---------- Fetch + Fill ----------
-  async function fetchData() {
+  async function fetchData(targetRowNumber = null) {
     console.log("[GSS][Fetch] Requesting data...");
 
     try {
@@ -326,14 +283,14 @@
         alert("Manual weight entry is required to continue.");
         return;
       }
-      autoFillNextAvailableRow(data);
+      autoFillRow(data, targetRowNumber);
     } catch (err) {
       console.error("[GSS][Fetch] Error:", err);
       alert("Failed to fetch data. If using self-signed cert, open the API URL once and accept the certificate.");
     }
   }
 
-  async function measureThenFetch() {
+  async function measureThenFetch(targetRowNumber = null) {
     console.log("[GSS][Measure] Triggering capture...");
     const prevTs = latestMeasurementTimestamp || 0;
 
@@ -405,16 +362,16 @@
         return;
       }
 
-      autoFillNextAvailableRow(data);
+      autoFillRow(data, targetRowNumber);
     } catch (err) {
       console.error("[GSS][Measure] Failed:", err);
       alert("Could not trigger measurement. Check MeasurePi API and WebSocket connectivity.");
     }
   }
 
-  function autoFillNextAvailableRow(data) {
-    const nextRowNumber = findNextEmptyRow();
-    if (nextRowNumber === -1) {
+  function autoFillRow(data, targetRowNumber = null) {
+    const nextRowNumber = targetRowNumber ?? findNextEmptyRow();
+    if (nextRowNumber === -1 || nextRowNumber == null) {
       alert("No available rows left to fill.");
       return;
     }
@@ -455,5 +412,5 @@
   // ---------- Init ----------
   connectWebSocket();
   createFixedFetchButton();      // floating Fetch button
-  createMeasureButtonInPanel();  // MEASURE in panel heading
+  createMeasureButtonsForRows(); // MEASURE button on each data row
 })();
