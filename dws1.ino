@@ -69,9 +69,9 @@ static const float    DIM_CHANGE_FRACTION  = 0.10f;   // 10% change threshold
 static const uint8_t  AXES_FOR_LASER       = 2;       // any 2 axes must change
 
 // 👉 Fixed reference distances (sensor → back wall with NO box)
-static const float REF_LENGTH_CM = 82.0f;   // L_ref
-static const float REF_HEIGHT_CM = 93.0f;   // H_ref
-static const float REF_WIDTH_CM  = 72.0f;   // W_ref
+static const float REF_LENGTH_CM = 80.0f;   // L_ref
+static const float REF_HEIGHT_CM = 91.0f;   // H_ref
+static const float REF_WIDTH_CM  = 71.0f;   // W_ref
 
 // WiFi / MQTT
 static const char WIFI_SSID[]      = "REDLITE";
