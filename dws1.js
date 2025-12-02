@@ -71,6 +71,19 @@
     return !Number.isFinite(weightValue);
   };
 
+  const normalizeWeight = (value) => {
+    const parsed = Number.parseFloat(value);
+    if (!Number.isFinite(parsed)) return null;
+    return Number(parsed.toFixed(3));
+  };
+
+  const roundUpToNearestHalf = (value) => {
+    const parsed = Number.parseFloat(value);
+    if (!Number.isFinite(parsed)) return null;
+    const rounded = Math.ceil(parsed * 2) / 2; // ceil to 0.5 increments
+    return Number(rounded.toFixed(1));
+  };
+
   async function ensureManualWeight(data) {
     if (!needsManualWeight(data)) {
       return data;
@@ -388,10 +401,12 @@
       }
     }
 
+    const weightValue = roundUpToNearestHalf(data.weight ?? data.weight_gross ?? data.weight_net);
+
     setValue("length", data.length);
     setValue("width",  data.width);
     setValue("height", data.height);
-    setValue("kg",     data.weight ?? 0);
+    setValue("kg",     weightValue ?? "");
     console.log(`[GSS][Form] Row ${nextRowNumber} filled.`);
   }
 

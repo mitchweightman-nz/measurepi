@@ -10,6 +10,7 @@
  *   - CAPTURE JSON includes raw distances AND box dimensions:
  *       box = reference_distance - raw_distance
  *   - NEW: When A0 is LOW, live raw + box dims are printed to Serial
+ *   - Weight now supplied by a dedicated RS232 scale on the Pi (USB, 9600 baud)
  *
  * MQTT Topics:
  *   In  : measure/cmd   (CAP/CAPTURE/CAPTUR)
