@@ -291,7 +291,6 @@ static void statusLedsUpdate() {
   bool tcaOk    = g_tcaPresent;
   bool tfOk     = (g_tfInit1Ok && g_tfInit2Ok && g_tfInit3Ok && !g_tfReadError);
   bool anyError = (!wifiOk || !mqttOk || !tcaOk || !tfOk);
-  bool anyWarn  = (g_commFailCount > 0 || g_tfReadError);
 
   // Pixel 1: WiFi
   if (!wifiOk) setPixStatus(1, ST_PENDING);   // trying / not connected yet
