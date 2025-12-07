@@ -11,6 +11,7 @@ MeasurePi.py — Integrated Flask dashboard + MQTT client for Raspberry Pi
 import json
 import math
 import os
+import re
 import sys
 import threading
 import time
@@ -18,12 +19,13 @@ from pathlib import Path
 import traceback
 
 # ─── Third-party / hardware libraries ───────────────────────────────────────
-import board 
-import busio 
+import board
+import busio
 
 import paho.mqtt.client as mqtt
 
 import adafruit_character_lcd.character_lcd_i2c as charlcd
+import serial
 
 # ─── Flask web service ───────────────────────────────────────────────────────
 from flask import Flask, jsonify, render_template, request
@@ -37,7 +39,12 @@ MQTT_TOPIC_LOG = "measure/log"
 MQTT_COMMAND_TOPIC = "measure/cmd"
 MQTT_CAPTURE_TOPIC = "measure/cmd"
 
-MAX_RAW_HISTORY = 200 
+MAX_RAW_HISTORY = 200
+
+WEIGHT_SERIAL_PORT = os.getenv("WEIGHT_SERIAL_PORT", "/dev/ttyUSB0")
+WEIGHT_SERIAL_BAUD = int(os.getenv("WEIGHT_SERIAL_BAUD", 9600))
+WEIGHT_STALE_SECONDS = float(os.getenv("WEIGHT_STALE_SECONDS", 5.0))
+WEIGHT_PARSE_REGEX = re.compile(r"([-+]?\d+(?:\.\d{1,3})?)")
 
 SSL_CERT_PATH_ENV = "SSL_CERT_PATH"
 SSL_KEY_PATH_ENV = "SSL_KEY_PATH"
@@ -71,6 +78,10 @@ mqtt_client = mqtt.Client(client_id=f"measure_pi_client_{os.getpid()}", protocol
 scale_present_flag = None  # None = unknown, True = scale detected, False = no scale
 awaiting_manual_weight = False
 pending_manual_weight_value = None
+_latest_scale_weight = None
+_latest_scale_timestamp = 0.0
+_scale_reader_thread = None
+_scale_reader_stop_event = threading.Event()
 
 
 # ─── MQTT Callbacks ──────────────────────────────────────────────────────────
@@ -125,6 +136,96 @@ def _safe_int(value):
     return None
 
 
+def _parse_weight_from_line(line):
+    if not line:
+        return None
+    match = WEIGHT_PARSE_REGEX.search(line)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _is_scale_fresh(max_age_seconds=WEIGHT_STALE_SECONDS):
+    if _latest_scale_weight is None:
+        return False
+    age = time.time() - _latest_scale_timestamp
+    return age <= max_age_seconds
+
+
+def _get_latest_weight(max_age_seconds=WEIGHT_STALE_SECONDS):
+    if not _is_scale_fresh(max_age_seconds):
+        return None
+    return round(float(_latest_scale_weight), 3)
+
+
+def _update_weight_state(weight_value, timestamp=None):
+    global _latest_scale_weight, _latest_scale_timestamp, scale_present_flag, pending_manual_weight_value, awaiting_manual_weight
+
+    ts = timestamp if timestamp is not None else time.time()
+    with _data_lock:
+        _latest_scale_weight = round(float(weight_value), 3)
+        _latest_scale_timestamp = ts
+        scale_present_flag = True
+        pending_manual_weight_value = None
+        awaiting_manual_weight = False
+
+        if current_measurement:
+            current_measurement["weight"] = _latest_scale_weight
+            current_measurement["weight_net"] = _latest_scale_weight
+            current_measurement["weight_gross"] = _latest_scale_weight
+            current_measurement["manual_weight_required"] = False
+            current_measurement["scale_present"] = True
+
+
+def _scale_reader_loop():
+    global scale_present_flag
+    print(f"[SCALE] RS232 reader starting on {WEIGHT_SERIAL_PORT} @ {WEIGHT_SERIAL_BAUD} baud")
+
+    while not _scale_reader_stop_event.is_set():
+        try:
+            with serial.Serial(WEIGHT_SERIAL_PORT, WEIGHT_SERIAL_BAUD, timeout=1) as ser:
+                ser.reset_input_buffer()
+                while not _scale_reader_stop_event.is_set():
+                    raw = ser.readline()
+                    if not raw:
+                        continue
+                    try:
+                        text = raw.decode(errors="ignore").strip()
+                    except Exception:
+                        continue
+
+                    weight_val = _parse_weight_from_line(text)
+                    if weight_val is None:
+                        continue
+
+                    _update_weight_state(weight_val)
+        except serial.SerialException as e:
+            if not _scale_reader_stop_event.is_set():
+                print(f"[SCALE] Serial error on {WEIGHT_SERIAL_PORT}: {e}. Retrying in 2s...")
+                scale_present_flag = False
+                time.sleep(2)
+        except Exception as e:
+            if not _scale_reader_stop_event.is_set():
+                print(f"[SCALE] Unexpected error: {e}")
+                scale_present_flag = False
+                time.sleep(2)
+
+
+def _start_scale_reader():
+    global _scale_reader_thread
+    if _scale_reader_thread and _scale_reader_thread.is_alive():
+        return
+    _scale_reader_stop_event.clear()
+    _scale_reader_thread = threading.Thread(target=_scale_reader_loop, daemon=True)
+    _scale_reader_thread.start()
+
+
+# Ensure initial scale status reflects any lack of data before first MQTT payload
+scale_present_flag = False
+
 def _on_message(client, userdata, msg):
     global _last_lcd_text, scale_present_flag, pending_manual_weight_value, awaiting_manual_weight
     # print(f"[MQTT] Received message on topic '{msg.topic}': {msg.payload.decode()}")
@@ -145,7 +246,7 @@ def _on_message(client, userdata, msg):
                 "timestamp": time.time()
             }
 
-            # Optional fields published by the UNO firmware
+            # Optional fields published by the UNO firmware or RS232 scale
             new_measurements["weight"] = _safe_float(data.get("weight"))
             new_measurements["weight_net"] = _safe_float(data.get("weight_net"))
             new_measurements["weight_gross"] = _safe_float(data.get("weight_gross"))
@@ -159,10 +260,16 @@ def _on_message(client, userdata, msg):
                 elif net_val is not None:
                     new_measurements["weight"] = net_val
 
+            latest_serial_weight = _get_latest_weight()
+            if latest_serial_weight is not None:
+                new_measurements["weight"] = latest_serial_weight
+                new_measurements["weight_net"] = latest_serial_weight
+                new_measurements["weight_gross"] = latest_serial_weight
+
             have_scale = any(
                 new_measurements.get(key) is not None
                 for key in ("weight", "weight_net", "weight_gross", "tare_g")
-            )
+            ) or _is_scale_fresh()
             new_measurements["scale_present"] = have_scale
 
             if not have_scale:
@@ -351,6 +458,8 @@ def json_data_route():
         if meta_key in current_data_copy:
             current_rounded[meta_key] = current_data_copy[meta_key]
 
+    current_rounded["scale_present"] = _is_scale_fresh()
+
     return jsonify({"current": current_rounded, "history": history_to_send})
 
 @app.route("/api/raw")
@@ -445,7 +554,8 @@ def capture_api_route():
     global awaiting_manual_weight
 
     with _data_lock:
-        current_scale_state = scale_present_flag
+        current_scale_state = _is_scale_fresh()
+        scale_present_flag = current_scale_state
         if current_scale_state is False:
             awaiting_manual_weight = True
         else:
@@ -540,6 +650,8 @@ def run_application():
     print("[SYSTEM] MeasurePi MQTT Client & Web Server is starting up...")
 
     try:
+        _start_scale_reader()
+
         _init_lcd_if_present()
 
         if MQTT_BROKER:
@@ -581,6 +693,10 @@ def run_application():
         traceback.print_exc()
     finally:
         print("[SYSTEM] Initiating shutdown sequence...")
+
+        _scale_reader_stop_event.set()
+        if _scale_reader_thread and _scale_reader_thread.is_alive():
+            _scale_reader_thread.join(timeout=2)
         
         if mqtt_client:
             if mqtt_client.is_connected(): 
