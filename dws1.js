@@ -119,7 +119,8 @@
       try {
         const msg = JSON.parse(event.data);
         if (msg && msg.type === "current_measurement" && msg.data) {
-          const d = msg.data;
+          const d = normalizeMeasurement(msg.data) ?? msg.data;
+          if (!isValidPayload(d)) return;
           const ts = typeof msg.timestamp === "number"
             ? msg.timestamp
             : (typeof d.timestamp === "number" ? d.timestamp : (Date.now() / 1000));
@@ -239,6 +240,36 @@
     return payload;
   }
 
+  function normalizeMeasurement(data) {
+    if (typeof data !== "object" || data == null) return null;
+
+    const dimensionVal = Number.parseFloat(
+      data.dimension ?? data.dimension_cm ?? data.dim
+    );
+
+    const pickVal = (...keys) => {
+      for (const k of keys) {
+        const v = Number.parseFloat(data[k]);
+        if (Number.isFinite(v)) return v;
+      }
+      if (Number.isFinite(dimensionVal)) return dimensionVal;
+      return null;
+    };
+
+    const normalized = {
+      height: pickVal("height", "height_box", "height_cm"),
+      width: pickVal("width", "width_box", "width_cm"),
+      length: pickVal("length", "length_box", "length_cm"),
+    };
+
+    const weightVal = pickVal("weight", "weight_gross", "weight_net");
+    if (Number.isFinite(weightVal)) {
+      normalized.weight = weightVal;
+    }
+
+    return normalized;
+  }
+
   function isValidPayload(data) {
     if (typeof data !== "object" || data == null) return false;
     const okNum = v => v !== null && v !== "" && isFinite(+v);
@@ -266,7 +297,7 @@
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const payload = await response.json();
-        const m = extractMeasurementFromPayload(payload);
+        const m = normalizeMeasurement(extractMeasurementFromPayload(payload));
         if (!isValidPayload(m)) {
           console.error("[GSS][Fetch] Invalid JSON format:", payload);
           alert("Invalid data received. Check your API response.");
@@ -335,7 +366,7 @@
             });
             if (resp.ok) {
               const payload = await resp.json();
-              const m = extractMeasurementFromPayload(payload);
+              const m = normalizeMeasurement(extractMeasurementFromPayload(payload));
               if (isValidPayload(m)) {
                 data = m;
                 console.log(`[GSS][Measure] Got HTTP data after ${tries} poll(s):`, data);

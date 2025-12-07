@@ -11,6 +11,7 @@ MeasurePi.py — Integrated Flask dashboard + MQTT client for Raspberry Pi
 import json
 import math
 import os
+import re
 import sys
 import threading
 import time
@@ -19,11 +20,12 @@ import traceback
 
 # ─── Third-party / hardware libraries ───────────────────────────────────────
 import board 
-import busio 
+import busio
 
 import paho.mqtt.client as mqtt
 
 import adafruit_character_lcd.character_lcd_i2c as charlcd
+import serial
 
 # ─── Flask web service ───────────────────────────────────────────────────────
 from flask import Flask, jsonify, render_template, request
@@ -45,10 +47,19 @@ DEFAULT_SSL_CERT_PATH = str(Path.home() / "measure_pi" / "cert.pem")
 DEFAULT_SSL_KEY_PATH = str(Path.home() / "measure_pi" / "private.pem")
 
 DEFAULT_ROUNDING_SETTINGS = {
-    "height": "ceil", 
+    "height": "ceil",
     "length": "ceil",
     "width": "ceil",
 }
+
+SERIAL_SCALE_PORT = os.getenv("SERIAL_SCALE_PORT", "/dev/ttyUSB0")
+SERIAL_SCALE_BAUDRATE = int(os.getenv("SERIAL_SCALE_BAUDRATE", 9600))
+SERIAL_SCALE_ENABLED = os.getenv("ENABLE_SERIAL_SCALE", "true").lower() not in (
+    "0",
+    "false",
+    "no",
+)
+SERIAL_SCALE_RECONNECT_DELAY = 3
 
 # ─── Global State Variables ──────────────────────────────────────────────────
 lcd = None  # I2C Character LCD object (initialized in _init_lcd_if_present)
@@ -60,6 +71,7 @@ raw_mqtt_history = []
 measure_log_history = []
 _data_lock = threading.Lock()
 _last_lcd_text = ""
+_serial_scale_thread = None
 
 rounding_settings = DEFAULT_ROUNDING_SETTINGS.copy()
 
@@ -134,16 +146,28 @@ def _on_message(client, userdata, msg):
             payload_str = msg.payload.decode('utf-8')
             data = json.loads(payload_str)
 
-            if not all(k in data for k in ["height", "width", "length"]):
-                print(f"[MQTT] Warning: Received data missing expected keys. Data: {data}")
-                return
+            timestamp = time.time()
 
+            def pick_dimension_value(key_candidates):
+                for candidate in key_candidates:
+                    value = _safe_float(data.get(candidate))
+                    if value is not None:
+                        return value
+                return None
+
+            # Accept either explicit h/w/l keys, box_* fallbacks, or a single
+            # "dimension" value (replicated across all three axes).
+            single_dimension = pick_dimension_value(["dimension", "dimension_cm", "dim"])
             new_measurements = {
-                "height": _safe_float(data.get("height")),
-                "width": _safe_float(data.get("width")),
-                "length": _safe_float(data.get("length")),
-                "timestamp": time.time()
+                "height": pick_dimension_value(["height", "height_box", "height_cm"]) or single_dimension,
+                "width": pick_dimension_value(["width", "width_box", "width_cm"]) or single_dimension,
+                "length": pick_dimension_value(["length", "length_box", "length_cm"]) or single_dimension,
+                "timestamp": timestamp,
             }
+
+            if all(new_measurements.get(axis) is None for axis in ("height", "width", "length")):
+                print(f"[MQTT] Warning: Received data missing dimension values. Data: {data}")
+                return
 
             # Optional fields published by the UNO firmware
             new_measurements["weight"] = _safe_float(data.get("weight"))
@@ -322,6 +346,134 @@ def _apply_rounding(measurements: dict) -> dict:
     return rounded_measurements
 
 
+# ─── Serial Scale Integration ────────────────────────────────────────────────
+def _parse_serial_scale_line(line: str):
+    if not isinstance(line, str):
+        return None
+
+    match = re.search(r"([-+]?\d+(?:\.\d+)?)", line)
+    if not match:
+        return None
+
+    return _safe_float(match.group(1))
+
+
+def _apply_serial_scale_weight(weight_value, source_line=None):
+    global scale_present_flag, pending_manual_weight_value, awaiting_manual_weight
+
+    if not isinstance(weight_value, (int, float)):
+        return
+
+    weight_float = float(weight_value)
+    timestamp = time.time()
+
+    with _data_lock:
+        pending_manual_weight_value = None
+        awaiting_manual_weight = False
+        scale_present_flag = True
+
+        updated_measurement = current_measurement.copy() if current_measurement else {}
+        updated_measurement.setdefault("timestamp", timestamp)
+
+        updated_measurement.update(
+            {
+                "weight": weight_float,
+                "weight_net": weight_float,
+                "weight_gross": weight_float,
+                "manual_weight": False,
+                "manual_weight_required": False,
+                "scale_present": True,
+                "weight_timestamp": timestamp,
+                "weight_source": "serial_scale",
+            }
+        )
+
+        if SERIAL_SCALE_PORT:
+            updated_measurement["serial_scale_port"] = SERIAL_SCALE_PORT
+
+        current_measurement.clear()
+        current_measurement.update(updated_measurement)
+
+        measurement_history.append(updated_measurement.copy())
+        if len(measurement_history) > MAX_RAW_HISTORY:
+            measurement_history.pop(0)
+
+    if source_line:
+        print(f"[SERIAL-SCALE] Weight {weight_float} parsed from line: '{source_line}'")
+    else:
+        print(f"[SERIAL-SCALE] Weight {weight_float} received from serial scale.")
+
+
+def _serial_scale_reader_loop():
+    global scale_present_flag
+
+    if not SERIAL_SCALE_PORT:
+        print("[SERIAL-SCALE] SERIAL_SCALE_PORT is not configured; skipping serial scale reader.")
+        return
+
+    print(
+        f"[SERIAL-SCALE] Starting reader on {SERIAL_SCALE_PORT} at {SERIAL_SCALE_BAUDRATE} baud..."
+    )
+
+    while True:
+        try:
+            with serial.Serial(SERIAL_SCALE_PORT, SERIAL_SCALE_BAUDRATE, timeout=1) as ser:
+                print(
+                    f"[SERIAL-SCALE] Connected to {SERIAL_SCALE_PORT}. Listening for weight data..."
+                )
+                while True:
+                    line_bytes = ser.readline()
+                    if not line_bytes:
+                        continue
+
+                    try:
+                        decoded = line_bytes.decode("utf-8", errors="ignore").strip()
+                    except Exception as e:
+                        print(f"[SERIAL-SCALE] Failed to decode serial data: {e}")
+                        continue
+
+                    if not decoded:
+                        continue
+
+                    weight_val = _parse_serial_scale_line(decoded)
+                    if weight_val is None:
+                        continue
+
+                    _apply_serial_scale_weight(weight_val, decoded)
+
+        except serial.SerialException as e:
+            print(
+                f"[SERIAL-SCALE] Serial exception on {SERIAL_SCALE_PORT}: {e}. Reconnecting in {SERIAL_SCALE_RECONNECT_DELAY}s..."
+            )
+            with _data_lock:
+                scale_present_flag = False
+            time.sleep(SERIAL_SCALE_RECONNECT_DELAY)
+        except Exception as e:
+            print(
+                f"[SERIAL-SCALE] Unexpected error while reading from {SERIAL_SCALE_PORT}: {e}. Reconnecting in {SERIAL_SCALE_RECONNECT_DELAY}s..."
+            )
+            traceback.print_exc()
+            with _data_lock:
+                scale_present_flag = False
+            time.sleep(SERIAL_SCALE_RECONNECT_DELAY)
+
+
+def _start_serial_scale_reader_thread():
+    global _serial_scale_thread
+
+    if not SERIAL_SCALE_ENABLED:
+        print("[SERIAL-SCALE] Serial scale reader disabled via ENABLE_SERIAL_SCALE flag.")
+        return
+
+    if _serial_scale_thread and _serial_scale_thread.is_alive():
+        return
+
+    _serial_scale_thread = threading.Thread(
+        target=_serial_scale_reader_loop, name="SerialScaleReader", daemon=True
+    )
+    _serial_scale_thread.start()
+
+
 # ─── Flask Web Application Routes ───────────────────────────────────────────
 app = Flask(__name__)
 
@@ -342,6 +494,22 @@ def json_data_route():
             current_rounded[key] = round(value, 3)
         elif value is None:
             current_rounded[key] = None
+
+    dimension_candidates = [
+        v
+        for v in [
+            current_rounded.get("height"),
+            current_rounded.get("width"),
+            current_rounded.get("length"),
+            current_data_copy.get("dimension"),
+            current_data_copy.get("dimension_cm"),
+        ]
+        if isinstance(v, (int, float))
+    ]
+    if dimension_candidates:
+        current_rounded["dimension"] = max(dimension_candidates)
+    else:
+        current_rounded["dimension"] = None
 
     if "tare_g" in current_data_copy:
         tare_value = current_data_copy.get("tare_g")
@@ -541,6 +709,8 @@ def run_application():
 
     try:
         _init_lcd_if_present()
+
+        _start_serial_scale_reader_thread()
 
         if MQTT_BROKER:
             try:

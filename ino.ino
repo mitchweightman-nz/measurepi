@@ -633,11 +633,22 @@ static void publishJson(float h_raw,float w_raw,float l_raw) {
   numOrNull(wBoxTxt, sizeof(wBoxTxt), w_box, 1);
   numOrNull(lBoxTxt, sizeof(lBoxTxt), l_box, 1);
 
-  // JSON: both raw distances AND computed box dimensions
+  // JSON: computed box dimensions (height/width/length) plus raw distances
+  float dimension_max = h_box;
+  if (isfinite(w_box) && (!isfinite(dimension_max) || w_box > dimension_max)) dimension_max = w_box;
+  if (isfinite(l_box) && (!isfinite(dimension_max) || l_box > dimension_max)) dimension_max = l_box;
+
+  char dimTxt[16];
+  numOrNull(dimTxt, sizeof(dimTxt), dimension_max, 1);
+
   char payload[256];
   snprintf(payload,sizeof(payload),
-    "{\"height_raw\":%s,\"width_raw\":%s,\"length_raw\":%s,"
+    "{\"height\":%s,\"width\":%s,\"length\":%s,"
+    "\"dimension\":%s,"
+    "\"height_raw\":%s,\"width_raw\":%s,\"length_raw\":%s,"
     "\"height_box\":%s,\"width_box\":%s,\"length_box\":%s}",
+    hBoxTxt,wBoxTxt,lBoxTxt,
+    dimTxt,
     hRawTxt,wRawTxt,lRawTxt,
     hBoxTxt,wBoxTxt,lBoxTxt);
 
