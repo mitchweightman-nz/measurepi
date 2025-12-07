@@ -477,6 +477,14 @@ def _start_serial_scale_reader_thread():
 # ─── Flask Web Application Routes ───────────────────────────────────────────
 app = Flask(__name__)
 
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
+
 @app.route("/")
 def index_route():
     return render_template("index.html")
