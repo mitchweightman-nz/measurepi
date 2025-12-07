@@ -28,9 +28,9 @@ import adafruit_character_lcd.character_lcd_i2c as charlcd
 import serial
 
 # ─── Flask web service ───────────────────────────────────────────────────────
+import urllib.parse
+
 from flask import Flask, jsonify, make_response, render_template, request
-
-
 # ─── Configuration Constants ─────────────────────────────────────────────────
 MQTT_BROKER = os.getenv("MQTT_BROKER", "10.1.1.85")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
