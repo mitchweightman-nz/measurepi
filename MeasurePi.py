@@ -477,11 +477,43 @@ def _start_serial_scale_reader_thread():
 # ─── Flask Web Application Routes ───────────────────────────────────────────
 app = Flask(__name__)
 
+
+def _extract_origin_from_referer(referer_value):
+    if not referer_value:
+        return None
+
+    parsed_referer = urllib.parse.urlparse(referer_value)
+    if not parsed_referer.scheme or not parsed_referer.netloc:
+        return None
+
+    return f"{parsed_referer.scheme}://{parsed_referer.netloc}"
+
+
+def _merge_vary(response, values):
+    existing = response.headers.get("Vary", "")
+    merged_values = []
+
+    if existing:
+        merged_values.extend([item.strip() for item in existing.split(",") if item.strip()])
+
+    for value in values:
+        if value not in merged_values:
+            merged_values.append(value)
+
+    if merged_values:
+        response.headers["Vary"] = ", ".join(merged_values)
+
+
 def _add_cors_headers(response):
     request_origin = request.headers.get("Origin")
-    allow_origin = request_origin or "*"
 
-    response.headers["Access-Control-Allow-Origin"] = allow_origin
+    if not request_origin:
+        request_origin = _extract_origin_from_referer(request.headers.get("Referer"))
+
+    if not request_origin:
+        return response
+
+    response.headers["Access-Control-Allow-Origin"] = request_origin
     response.headers["Access-Control-Allow-Credentials"] = "true"
 
     request_headers = request.headers.get(
@@ -495,8 +527,9 @@ def _add_cors_headers(response):
     else:
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
 
-    if allow_origin != "*":
-        response.headers["Vary"] = "Origin"
+    # Avoid wildcards so browsers can send credentials. Reflect the request origin
+    # (or fall back to Referer) and signal caches that responses may vary accordingly.
+    _merge_vary(response, ["Origin", "Referer"])
 
     return response
 
@@ -512,13 +545,6 @@ def handle_options_request():
 @app.after_request
 def add_cors_headers(response):
     return _add_cors_headers(response)
-
-@app.after_request
-def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    return response
 
 @app.route("/")
 def index_route():
