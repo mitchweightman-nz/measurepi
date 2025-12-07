@@ -46,7 +46,8 @@ SSL_KEY_PATH_ENV = "SSL_KEY_PATH"
 DEFAULT_SSL_CERT_PATH = str(Path.home() / "measure_pi" / "cert.pem")
 DEFAULT_SSL_KEY_PATH = str(Path.home() / "measure_pi" / "private.pem")
 CORS_ALLOWED_ORIGINS_ENV = "CORS_ALLOWED_ORIGINS"
-
+DEFAULT_EXTRA_ALLOWED_ORIGINS = {"https://nzc.gosweetspot.com"}
+x
 DEFAULT_ROUNDING_SETTINGS = {
     "height": "ceil",
     "length": "ceil",
@@ -503,7 +504,7 @@ def _parse_allowed_origins():
     """
 
     raw_value = os.getenv(CORS_ALLOWED_ORIGINS_ENV, "")
-    allowed = set()
+  allowed = set(DEFAULT_EXTRA_ALLOWED_ORIGINS)
 
     for item in raw_value.split(","):
         trimmed = item.strip()
