@@ -28,7 +28,7 @@ import adafruit_character_lcd.character_lcd_i2c as charlcd
 import serial
 
 # ─── Flask web service ───────────────────────────────────────────────────────
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, make_response, render_template, request
 
 
 # ─── Configuration Constants ─────────────────────────────────────────────────
@@ -477,6 +477,41 @@ def _start_serial_scale_reader_thread():
 # ─── Flask Web Application Routes ───────────────────────────────────────────
 app = Flask(__name__)
 
+def _add_cors_headers(response):
+    request_origin = request.headers.get("Origin")
+    allow_origin = request_origin or "*"
+
+    response.headers["Access-Control-Allow-Origin"] = allow_origin
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+
+    request_headers = request.headers.get(
+        "Access-Control-Request-Headers", "Content-Type, Authorization"
+    )
+    response.headers["Access-Control-Allow-Headers"] = request_headers
+
+    request_method = request.headers.get("Access-Control-Request-Method")
+    if request_method:
+        response.headers["Access-Control-Allow-Methods"] = request_method
+    else:
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+
+    if allow_origin != "*":
+        response.headers["Vary"] = "Origin"
+
+    return response
+
+
+@app.before_request
+def handle_options_request():
+    if request.method == "OPTIONS":
+        response = make_response("", 204)
+        return _add_cors_headers(response)
+    return None
+
+
+@app.after_request
+def add_cors_headers(response):
+    return _add_cors_headers(response)
 
 @app.after_request
 def add_cors_headers(response):
