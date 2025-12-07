@@ -45,6 +45,7 @@ SSL_CERT_PATH_ENV = "SSL_CERT_PATH"
 SSL_KEY_PATH_ENV = "SSL_KEY_PATH"
 DEFAULT_SSL_CERT_PATH = str(Path.home() / "measure_pi" / "cert.pem")
 DEFAULT_SSL_KEY_PATH = str(Path.home() / "measure_pi" / "private.pem")
+CORS_ALLOWED_ORIGINS_ENV = "CORS_ALLOWED_ORIGINS"
 
 DEFAULT_ROUNDING_SETTINGS = {
     "height": "ceil",
@@ -489,6 +490,50 @@ def _extract_origin_from_referer(referer_value):
     return f"{parsed_referer.scheme}://{parsed_referer.netloc}"
 
 
+def _parse_allowed_origins():
+    """
+    Return a set of allowed origins (scheme + host [+ port]) configured via
+    the `CORS_ALLOWED_ORIGINS` environment variable.
+
+    The variable accepts a comma-separated list, for example:
+    "https://nzc.gosweetspot.com,https://nzc.redlite.nz:9001"
+
+    Empty values are ignored and the result is normalized to lowercase for
+    comparisons.
+    """
+
+    raw_value = os.getenv(CORS_ALLOWED_ORIGINS_ENV, "")
+    allowed = set()
+
+    for item in raw_value.split(","):
+        trimmed = item.strip()
+        if trimmed:
+            allowed.add(trimmed.lower())
+
+    return allowed
+
+
+_ALLOWED_ORIGINS = _parse_allowed_origins()
+
+
+def _is_origin_allowed(origin):
+    """
+    Determine whether the given origin should be echoed in CORS headers.
+
+    If no explicit allow-list is configured, all origins are permitted (the
+    previous default behavior). When a list is provided, the comparison is
+    case-insensitive and expects an exact scheme/host[/port] match.
+    """
+
+    if not origin:
+        return False
+
+    if not _ALLOWED_ORIGINS:
+        return True
+
+    return origin.lower() in _ALLOWED_ORIGINS
+
+
 def _merge_vary(response, values):
     existing = response.headers.get("Vary", "")
     merged_values = []
@@ -510,7 +555,7 @@ def _add_cors_headers(response):
     if not request_origin:
         request_origin = _extract_origin_from_referer(request.headers.get("Referer"))
 
-    if not request_origin:
+    if not _is_origin_allowed(request_origin):
         return response
 
     response.headers["Access-Control-Allow-Origin"] = request_origin
