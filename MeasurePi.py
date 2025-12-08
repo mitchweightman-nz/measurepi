@@ -175,7 +175,11 @@ def _initialize_upnp_client():
         print(f"[UPNP] Failed to select Internet Gateway Device: {exc}")
         return None
 
-    print(f"[UPNP] Selected gateway {client.urlbase} (LAN: {client.lanaddr})")
+    gateway_id = getattr(client, "urlbase", None) or getattr(client, "location", None)
+    if gateway_id:
+        print(f"[UPNP] Selected gateway {gateway_id} (LAN: {client.lanaddr})")
+    else:
+        print(f"[UPNP] Selected gateway (LAN: {client.lanaddr})")
 
     try:
         external_ip = client.externalipaddress()
