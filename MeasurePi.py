@@ -192,10 +192,10 @@ def _ensure_upnp_mapping(client, external_port, internal_port, protocol, descrip
         (
             mapped_internal_client,
             mapped_internal_port,
-            mapped_protocol,
+            _,
             mapped_description,
-            mapped_enabled,
-            mapped_lease_duration,
+            _,
+            _,
         ) = existing_mapping
 
         if mapped_internal_client == client.lanaddr and mapped_internal_port == internal_port:
