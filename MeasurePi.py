@@ -8,6 +8,7 @@ MeasurePi.py — Integrated Flask dashboard + MQTT client for Raspberry Pi
 - Refactored by AI to remove direct sensor reading and calibration.
 """
 # ─── Standard library ────────────────────────────────────────────────────────
+import importlib.util
 import json
 import math
 import os
@@ -39,7 +40,7 @@ MQTT_TOPIC_LOG = "measure/log"
 MQTT_COMMAND_TOPIC = "measure/cmd"
 MQTT_CAPTURE_TOPIC = "measure/cmd"
 
-MAX_RAW_HISTORY = 200 
+MAX_RAW_HISTORY = 200
 
 SSL_CERT_PATH_ENV = "SSL_CERT_PATH"
 SSL_KEY_PATH_ENV = "SSL_KEY_PATH"
@@ -53,6 +54,10 @@ DEFAULT_ROUNDING_SETTINGS = {
     "length": "ceil",
     "width": "ceil",
 }
+
+ENABLE_UPNP = os.getenv("ENABLE_UPNP", "true").lower() not in ("0", "false", "no")
+UPNP_DISCOVERY_TIMEOUT_MS = int(os.getenv("UPNP_DISCOVERY_TIMEOUT_MS", 2000))
+UPNP_LEASE_DURATION = int(os.getenv("UPNP_LEASE_DURATION", 0))
 
 SERIAL_SCALE_PORT = os.getenv("SERIAL_SCALE_PORT", "/dev/ttyUSB0")
 SERIAL_SCALE_BAUDRATE = int(os.getenv("SERIAL_SCALE_BAUDRATE", 9600))
@@ -137,6 +142,109 @@ def _safe_int(value):
     except (TypeError, ValueError):
         return None
     return None
+
+
+def _initialize_upnp_client():
+    if not ENABLE_UPNP:
+        print("[UPNP] UPnP configuration disabled via ENABLE_UPNP.")
+        return None
+
+    if importlib.util.find_spec("miniupnpc") is None:
+        print("[UPNP] miniupnpc not installed. Skipping UPnP configuration.")
+        return None
+
+    import miniupnpc
+
+    client = miniupnpc.UPnP()
+    client.discoverdelay = max(100, UPNP_DISCOVERY_TIMEOUT_MS)
+
+    try:
+        discovered = client.discover()
+    except Exception as exc:
+        print(f"[UPNP] Discovery failed: {exc}")
+        traceback.print_exc()
+        return None
+
+    if discovered == 0:
+        print("[UPNP] No UPnP-enabled gateway discovered.")
+        return None
+
+    try:
+        client.selectigd()
+    except Exception as exc:
+        print(f"[UPNP] Failed to select Internet Gateway Device: {exc}")
+        return None
+
+    print(f"[UPNP] Selected gateway {client.urlbase} (LAN: {client.lanaddr})")
+
+    try:
+        external_ip = client.externalipaddress()
+        print(f"[UPNP] External IP address: {external_ip}")
+    except Exception as exc:
+        print(f"[UPNP] Unable to retrieve external IP address: {exc}")
+
+    return client
+
+
+def _ensure_upnp_mapping(client, external_port, internal_port, protocol, description):
+    existing_mapping = client.getspecificportmapping(external_port, protocol)
+    if existing_mapping:
+        (
+            mapped_internal_client,
+            mapped_internal_port,
+            _,
+            mapped_description,
+            _,
+            _,
+        ) = existing_mapping
+
+        if mapped_internal_client == client.lanaddr and mapped_internal_port == internal_port:
+            print(
+                f"[UPNP] Port {external_port}/{protocol} already mapped to {mapped_internal_client}:{mapped_internal_port}."
+            )
+            return True
+
+        print(
+            "[UPNP] Port mapping conflict for "
+            f"{external_port}/{protocol}: existing mapping points to "
+            f"{mapped_internal_client}:{mapped_internal_port} ({mapped_description}), "
+            f"desired {client.lanaddr}:{internal_port}."
+        )
+        return False
+
+    try:
+        client.addportmapping(
+            external_port,
+            protocol,
+            client.lanaddr,
+            internal_port,
+            description,
+            "",
+            UPNP_LEASE_DURATION,
+        )
+        print(
+            f"[UPNP] Mapped {protocol} port {external_port} -> {client.lanaddr}:{internal_port} ({description})."
+        )
+        return True
+    except Exception as exc:
+        print(
+            f"[UPNP] Failed to map {protocol} port {external_port} -> {client.lanaddr}:{internal_port}: {exc}"
+        )
+        return False
+
+
+def _configure_upnp_port_mappings(flask_port):
+    client = _initialize_upnp_client()
+    if not client:
+        return
+
+    mappings = [
+        (MQTT_PORT, MQTT_PORT, "TCP", "MeasurePi MQTT"),
+        (flask_port, flask_port, "TCP", "MeasurePi Flask"),
+    ]
+
+    for external_port, internal_port, protocol, description in mappings:
+        _ensure_upnp_mapping(client, external_port, internal_port, protocol, description)
 
 
 def _on_message(client, userdata, msg):
@@ -504,7 +612,7 @@ def _parse_allowed_origins():
     """
 
     raw_value = os.getenv(CORS_ALLOWED_ORIGINS_ENV, "")
-  allowed = set(DEFAULT_EXTRA_ALLOWED_ORIGINS)
+    allowed = set(DEFAULT_EXTRA_ALLOWED_ORIGINS)
 
     for item in raw_value.split(","):
         trimmed = item.strip()
@@ -822,6 +930,8 @@ def manual_weight_api_route():
 def run_application():
     print("[SYSTEM] MeasurePi MQTT Client & Web Server is starting up...")
 
+    flask_port = int(os.getenv("FLASK_PORT", os.getenv("PORT", 5000)))
+
     try:
         _init_lcd_if_present()
 
@@ -841,7 +951,7 @@ def run_application():
         else:
             print("[MQTT] MQTT_BROKER not configured. MQTT features disabled.")
             if lcd: lcd.message = "MQTT Disabled:\nBroker not set." ; time.sleep(2)
-        
+
         ssl_cert_file_path = Path(os.getenv(SSL_CERT_PATH_ENV, DEFAULT_SSL_CERT_PATH))
         ssl_key_file_path = Path(os.getenv(SSL_KEY_PATH_ENV, DEFAULT_SSL_KEY_PATH))
         
@@ -854,8 +964,8 @@ def run_application():
             if not ssl_cert_file_path.is_file(): print(f"         Missing SSL Cert: {ssl_cert_file_path} (set env var {SSL_CERT_PATH_ENV} to override)")
             if not ssl_key_file_path.is_file(): print(f"         Missing SSL Key:  {ssl_key_file_path} (set env var {SSL_KEY_PATH_ENV} to override)")
 
-        flask_port = int(os.getenv("FLASK_PORT", os.getenv("PORT", 5000)))
         protocol = "https" if flask_ssl_context else "http"
+        _configure_upnp_port_mappings(flask_port)
         print(f"[SYSTEM] Starting Flask web server on {protocol}://0.0.0.0:{flask_port}...")
         app.run(host="0.0.0.0", port=flask_port, ssl_context=flask_ssl_context, threaded=True, debug=False)
 
