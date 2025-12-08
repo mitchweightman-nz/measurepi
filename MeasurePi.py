@@ -162,6 +162,7 @@ def _initialize_upnp_client():
         discovered = client.discover()
     except Exception as exc:
         print(f"[UPNP] Discovery failed: {exc}")
+        traceback.print_exc()
         return None
 
     if discovered == 0:
