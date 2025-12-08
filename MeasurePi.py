@@ -149,18 +149,18 @@ def _initialize_upnp_client():
         print("[UPNP] UPnP configuration disabled via ENABLE_UPNP.")
         return None
 
-    if importlib.util.find_spec("miniupnpc") is None:
+    try:
+        import miniupnpc
+    except ImportError:
         print("[UPNP] miniupnpc not installed. Skipping UPnP configuration.")
         return None
-
-    import miniupnpc
 
     client = miniupnpc.UPnP()
     client.discoverdelay = max(100, UPNP_DISCOVERY_TIMEOUT_MS)
 
     try:
         discovered = client.discover()
-    except Exception as exc:
+    except miniupnpc.UPnPError as exc:
         print(f"[UPNP] Discovery failed: {exc}")
         return None
 
