@@ -90,6 +90,8 @@ mqtt_client = mqtt.Client(client_id=f"measure_pi_client_{os.getpid()}", protocol
 scale_present_flag = None  # None = unknown, True = scale detected, False = no scale
 awaiting_manual_weight = False
 pending_manual_weight_value = None
+_cached_serial_weight = None
+_cached_serial_weight_timestamp = None
 
 
 # ─── MQTT Callbacks ──────────────────────────────────────────────────────────
@@ -252,7 +254,14 @@ def _configure_upnp_port_mappings(flask_port):
 
 
 def _on_message(client, userdata, msg):
-    global _last_lcd_text, scale_present_flag, pending_manual_weight_value, awaiting_manual_weight
+    global (
+        _last_lcd_text,
+        scale_present_flag,
+        pending_manual_weight_value,
+        awaiting_manual_weight,
+        _cached_serial_weight,
+        _cached_serial_weight_timestamp,
+    )
     # print(f"[MQTT] Received message on topic '{msg.topic}': {msg.payload.decode()}")
 
     if msg.topic == MQTT_TOPIC_SUB:
@@ -261,6 +270,10 @@ def _on_message(client, userdata, msg):
             data = json.loads(payload_str)
 
             timestamp = time.time()
+
+            with _data_lock:
+                cached_serial_weight = _cached_serial_weight
+                cached_serial_weight_ts = _cached_serial_weight_timestamp
 
             def pick_dimension_value(key_candidates):
                 for candidate in key_candidates:
@@ -288,6 +301,14 @@ def _on_message(client, userdata, msg):
             new_measurements["weight_net"] = _safe_float(data.get("weight_net"))
             new_measurements["weight_gross"] = _safe_float(data.get("weight_gross"))
             new_measurements["tare_g"] = _safe_int(data.get("tare_g"))
+
+            if new_measurements.get("weight") is None and cached_serial_weight is not None:
+                new_measurements["weight"] = cached_serial_weight
+                new_measurements["weight_net"] = cached_serial_weight
+                new_measurements["weight_gross"] = cached_serial_weight
+                new_measurements["weight_timestamp"] = cached_serial_weight_ts
+                new_measurements["weight_source"] = "serial_scale_cached"
+                new_measurements["manual_weight"] = False
 
             if new_measurements.get("weight") is None:
                 gross_val = new_measurements.get("weight_gross")
@@ -473,7 +494,13 @@ def _parse_serial_scale_line(line: str):
 
 
 def _apply_serial_scale_weight(weight_value, source_line=None):
-    global scale_present_flag, pending_manual_weight_value, awaiting_manual_weight
+    global (
+        scale_present_flag,
+        pending_manual_weight_value,
+        awaiting_manual_weight,
+        _cached_serial_weight,
+        _cached_serial_weight_timestamp,
+    )
 
     if not isinstance(weight_value, (int, float)):
         return
@@ -485,6 +512,8 @@ def _apply_serial_scale_weight(weight_value, source_line=None):
         pending_manual_weight_value = None
         awaiting_manual_weight = False
         scale_present_flag = True
+        _cached_serial_weight = weight_float
+        _cached_serial_weight_timestamp = timestamp
 
         updated_measurement = current_measurement.copy() if current_measurement else {}
         updated_measurement.setdefault("timestamp", timestamp)
