@@ -963,7 +963,14 @@ def manual_weight_api_route():
 def run_application():
     print("[SYSTEM] MeasurePi MQTT Client & Web Server is starting up...")
 
-    flask_port = int(os.getenv("FLASK_PORT", os.getenv("PORT", 5000)))
+    requested_port = int(os.getenv("FLASK_PORT", os.getenv("PORT", 7000)))
+    flask_port = max(7000, requested_port)
+
+    if flask_port != requested_port:
+        print(
+            f"[SYSTEM] Requested port {requested_port} is below the minimum allowed (7000); "
+            f"using {flask_port} instead."
+        )
 
     try:
         _init_lcd_if_present()
