@@ -150,7 +150,7 @@ def main() -> None:
         raise RenewalError("Both domain and email must be provided via arguments or environment variables.")
 
     obtain_certificate(args.domain, args.email, certbot_bin=args.certbot_bin, staging=args.staging)
-    deploy_certificate(args.domain, cert_dest=Path(args.cert_path), key_dest=Path(args.key_path))
+    deploy_certificate(args.domain, cert_dest=args.cert_path, key_dest=args.key_path)
 
     if not args.skip_restart:
         restart_service(args.service_name)
