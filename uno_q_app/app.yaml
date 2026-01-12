@@ -1,0 +1,8 @@
+name: MeasurePi UNO Q
+description: "Measurement rig for the Arduino UNO Q that combines a Python MQTT bridge and an STM32U585 sketch to capture box dimensions."
+version: "1.0.0"
+# Optional: define any exposed ports or bricks.  This App exposes no network ports
+# because the MQTT broker address is configured via environment variables and
+# connections are initiated from the Python side.
+ports: []
+bricks: []
