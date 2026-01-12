@@ -1,11 +1,19 @@
 MeasurePi UNO Q Measurement Rig
 ===============================
 
-This repository contains aself‑contained application for the **Arduino UNO Q** board thatmeasures parcel dimensions using three TF‑Luna time‑of‑flight sensors, providesa simple web dashboard and publishes the results over MQTT. The project issplit into two components:
+This repository contains aself‑contained application for the **Arduino UNO Q** board thatmeasures parcel dimensions 
+using three TF‑Luna time‑of‑flight sensors, providesa simple web dashboard and publishes the results over MQTT. 
+The project issplit into two components:
 
-1.      **Microcontroller sketch (measure\_uno\_q.ino)** – runs on the STM32U585 microcontroller and handles the low‑leveltiming, laser control, sensor multiplexing          and state‑machine logic. The sketchcommunicates with the Linux side of the UNO Q via the Router Bridge RPCinterface. The same code is included under                  uno\_q\_app/sketch/sketch.ino so that it is automatically built as part of the UNO Q app.
+1.      **Microcontroller sketch (measure\_uno\_q.ino)** – runs on the STM32U585 microcontroller and handles the low‑leveltiming, 
+        laser control, sensor multiplexing and state‑machine logic. 
+        The sketchcommunicates with the Linux side of the UNO Q via the Router Bridge RPCinterface. The same code is included under                  
+        uno\_q\_app/sketch/sketch.ino so that it is automatically built as part of the UNO Q app.
 
-2.      **Python application** – runs on the embeddedDebian system (MPU) and uses the paho‑mqtt and Flask libraries topublish measurements to an MQTT broker and              serve a dashboard. The entry pointis uno\_q\_app/python/main.py (a copy of bridge\_mqtt.py), which interacts with the microcontroller via arduino.app\_utils.
+2.      **Python application** – runs on the embeddedDebian system (MPU) and uses the paho‑mqtt and 
+        Flask libraries to publish measurements to an MQTT broker and              
+        serve a dashboard. The entry pointis uno\_q\_app/python/main.py (a copy of bridge\_mqtt.py), 
+        which interacts with the microcontroller via arduino.app\_utils.
 
 The project can be deployed on astandard Raspberry Pi, but this document focuses on installing it on anArduino UNO Q using Arduino App Lab.
 
