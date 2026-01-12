@@ -79,6 +79,7 @@ measure_log_history = []
 _data_lock = threading.Lock()
 _last_lcd_text = ""
 _serial_scale_thread = None
+_serial_scale_connected = False
 
 rounding_settings = DEFAULT_ROUNDING_SETTINGS.copy()
 
@@ -274,6 +275,7 @@ def _on_message(client, userdata, msg):
             with _data_lock:
                 cached_serial_weight = _cached_serial_weight
                 cached_serial_weight_ts = _cached_serial_weight_timestamp
+                serial_scale_connected = _serial_scale_connected
 
             def pick_dimension_value(key_candidates):
                 for candidate in key_candidates:
@@ -302,7 +304,12 @@ def _on_message(client, userdata, msg):
             new_measurements["weight_gross"] = _safe_float(data.get("weight_gross"))
             new_measurements["tare_g"] = _safe_int(data.get("tare_g"))
 
-            if new_measurements.get("weight") is None and cached_serial_weight is not None:
+            # Only reuse cached serial readings while the serial reader is connected.
+            if (
+                new_measurements.get("weight") is None
+                and cached_serial_weight is not None
+                and serial_scale_connected
+            ):
                 new_measurements["weight"] = cached_serial_weight
                 new_measurements["weight_net"] = cached_serial_weight
                 new_measurements["weight_gross"] = cached_serial_weight
@@ -547,8 +554,16 @@ def _apply_serial_scale_weight(weight_value, source_line=None):
         print(f"[SERIAL-SCALE] Weight {weight_float} received from serial scale.")
 
 
+def _clear_serial_scale_cache():
+    global _cached_serial_weight, _cached_serial_weight_timestamp
+
+    with _data_lock:
+        _cached_serial_weight = None
+        _cached_serial_weight_timestamp = None
+
+
 def _serial_scale_reader_loop():
-    global scale_present_flag
+    global scale_present_flag, _serial_scale_connected
 
     if not SERIAL_SCALE_PORT:
         print("[SERIAL-SCALE] SERIAL_SCALE_PORT is not configured; skipping serial scale reader.")
@@ -564,6 +579,8 @@ def _serial_scale_reader_loop():
                 print(
                     f"[SERIAL-SCALE] Connected to {SERIAL_SCALE_PORT}. Listening for weight data..."
                 )
+                with _data_lock:
+                    _serial_scale_connected = True
                 while True:
                     line_bytes = ser.readline()
                     if not line_bytes:
@@ -590,6 +607,8 @@ def _serial_scale_reader_loop():
             )
             with _data_lock:
                 scale_present_flag = False
+                _serial_scale_connected = False
+            _clear_serial_scale_cache()
             time.sleep(SERIAL_SCALE_RECONNECT_DELAY)
         except Exception as e:
             print(
@@ -598,6 +617,8 @@ def _serial_scale_reader_loop():
             traceback.print_exc()
             with _data_lock:
                 scale_present_flag = False
+                _serial_scale_connected = False
+            _clear_serial_scale_cache()
             time.sleep(SERIAL_SCALE_RECONNECT_DELAY)
 
 
