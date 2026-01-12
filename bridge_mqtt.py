@@ -13,31 +13,31 @@ to a command topic and forwards capture requests back to the MCU.
 Environment variables control the broker address, credentials and
 reference distances used for calculating the box size:
 
-• ``MQTT_BROKER`` – hostname or IP address of the MQTT server (default
+• ``MQTT_BROKER`` – hostname or IP address of the MQTT server (default
   ``10.1.1.85``)
-• ``MQTT_PORT``  – port number of the MQTT server (default ``1883``)
-• ``MQTT_USER`` / ``MQTT_PASS`` – optional username/password for
+• ``MQTT_PORT``  – port number of the MQTT server (default ``1883``)
+• ``MQTT_USER`` / ``MQTT_PASS`` – optional username/password for
   authenticated brokers
-• ``MQTT_CMD_TOPIC`` – topic to listen for capture commands
+• ``MQTT_CMD_TOPIC`` – topic to listen for capture commands
   (default ``measure/cmd``)
-• ``MQTT_DATA_TOPIC`` – topic to publish measurement data to
+• ``MQTT_DATA_TOPIC`` – topic to publish measurement data to
   (default ``measure/data``)
-• ``MQTT_LOG_TOPIC`` – topic to publish log messages to (default
+• ``MQTT_LOG_TOPIC`` – topic to publish log messages to (default
   ``measure/log``)
-• ``MQTT_CLIENT_ID`` – MQTT client identifier (default ``uno-q-bridge``)
-• ``REF_LENGTH_CM``, ``REF_HEIGHT_CM``, ``REF_WIDTH_CM`` – reference
+• ``MQTT_CLIENT_ID`` – MQTT client identifier (default ``uno-q-bridge``)
+• ``REF_LENGTH_CM``, ``REF_HEIGHT_CM``, ``REF_WIDTH_CM`` – reference
   distances, in centimetres, measured from each sensor to the back wall
   with no box present (defaults mirror the UNO R4 sketch values)
 
 The script registers the following bridge functions for use by the
 microcontroller sketch:
 
-• ``linux_started`` – returns ``True`` to signal the MCU that the
+• ``linux_started`` – returns ``True`` to signal the MCU that the
   Python environment is ready.  The sketch polls this function during
   its setup routine before proceeding.
-• ``mcu_ready`` – called by the sketch when it has finished its setup
+• ``mcu_ready`` – called by the sketch when it has finished its setup
   routine.  The function simply logs that the MCU is ready.
-• ``measurement_data`` – invoked by the sketch via ``Bridge.notify``
+• ``measurement_data`` – invoked by the sketch via ``Bridge.notify``
   with three arguments: ``height_raw``, ``width_raw`` and
   ``length_raw`` (in centimetres).  The handler computes box
   dimensions, assembles a JSON payload and publishes it to
@@ -62,10 +62,33 @@ from typing import Optional
 import paho.mqtt.client as mqtt
 from arduino.app_utils import Bridge, App
 
+from collections import deque
+
 # ─── Configuration ───────────────────────────────────────────────────────
 
+def _get_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        _log(f"[CONFIG] Invalid value for {name}='{raw}', using default {default}.")
+        return default
+
+
+def _get_float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        _log(f"[CONFIG] Invalid value for {name}='{raw}', using default {default}.")
+        return default
+
 MQTT_BROKER = os.getenv("MQTT_BROKER", "10.1.1.85")
-MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
+MQTT_PORT = _get_int_env("MQTT_PORT", 1883)
 MQTT_USER = os.getenv("MQTT_USER")
 MQTT_PASS = os.getenv("MQTT_PASS")
 
@@ -74,57 +97,50 @@ MQTT_DATA_TOPIC = os.getenv("MQTT_DATA_TOPIC", "measure/data")
 MQTT_LOG_TOPIC = os.getenv("MQTT_LOG_TOPIC", "measure/log")
 MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID", "uno-q-bridge")
 
-# Reference distances (cm) used to compute box dimensions from raw sensor
-# readings.  These should match the values defined in the MCU sketch.
-REF_LENGTH_CM = float(os.getenv("REF_LENGTH_CM", 80.0))
-REF_HEIGHT_CM = float(os.getenv("REF_HEIGHT_CM", 89.0))
-REF_WIDTH_CM = float(os.getenv("REF_WIDTH_CM", 70.0))
-
-# ─── MQTT Setup ──────────────────────────────────────────────────────────
+REF_LENGTH_CM = _get_float_env("REF_LENGTH_CM", 80.0)
+REF_HEIGHT_CM = _get_float_env("REF_HEIGHT_CM", 89.0)
+REF_WIDTH_CM = _get_float_env("REF_WIDTH_CM", 70.0)
 
 mqtt_client = mqtt.Client(client_id=MQTT_CLIENT_ID, protocol=mqtt.MQTTv311)
 
 if MQTT_USER:
-    # Configure username/password only if supplied; some brokers do not
-    # require authentication and will reject a username field when empty.
-    mqtt_client.username_pw_set(username=MQTT_USER, password=MQTT_PASS or "")
+    if MQTT_PASS is not None:
+        mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
+    else:
+        mqtt_client.username_pw_set(MQTT_USER)
 
-# Keep a thread‑safe log buffer to allow publishing logs from within
-# callbacks without race conditions.  Paho’s callbacks execute in the
-# context of a network thread so we guard access to the buffer.
 _log_lock = threading.Lock()
-_log_buffer: list[str] = []
+_log_buffer: deque[str] = deque()
+
+
+def _sanitize_log(msg: str) -> str:
+    # Replace newlines and carriage returns to avoid log injection; collapse control chars
+    return ''.join(c if c.isprintable() and c not in '\n\r' else ' ' for c in msg)
 
 
 def _log(msg: str) -> None:
-    """Append a message to the local log buffer and print to console."""
+    msg = _sanitize_log(str(msg))
     print(msg)
     with _log_lock:
         _log_buffer.append(msg)
 
 
 def _flush_log() -> None:
-    """Publish any buffered log messages to the MQTT log topic."""
     if not mqtt_client.is_connected():
-        # If the client is not connected, drop the logs.  They will
-        # accumulate and clog memory otherwise.
         with _log_lock:
             _log_buffer.clear()
         return
     with _log_lock:
         while _log_buffer:
-            line = _log_buffer.pop(0)
+            line = _log_buffer.popleft()
             try:
                 mqtt_client.publish(MQTT_LOG_TOPIC, line, qos=0, retain=False)
             except Exception:
-                # Publishing can fail if the client disconnects between
-                # messages.  In that case, stop draining the buffer.
-                _log_buffer.insert(0, line)
+                _log_buffer.appendleft(line)
                 break
 
 
 def _on_mqtt_connect(client, userdata, flags, rc, properties=None):
-    """Callback fired when the MQTT client connects to the broker."""
     if rc == 0:
         _log(f"[MQTT] Connected to {MQTT_BROKER}:{MQTT_PORT} as {MQTT_CLIENT_ID}.")
         client.subscribe(MQTT_CMD_TOPIC)
@@ -134,13 +150,11 @@ def _on_mqtt_connect(client, userdata, flags, rc, properties=None):
 
 
 def _on_mqtt_disconnect(client, userdata, rc, properties=None):
-    """Callback fired when the MQTT client disconnects."""
     if rc != 0:
         _log(f"[MQTT] Unexpected disconnect (rc={rc}). Will retry automatically.")
 
 
 def _on_mqtt_message(client, userdata, msg):
-    """Process incoming MQTT messages on the command topic."""
     try:
         payload = msg.payload.decode("utf-8", errors="replace").strip()
     except Exception:
@@ -148,13 +162,9 @@ def _on_mqtt_message(client, userdata, msg):
     _log(f"[MQTT] Received message on '{msg.topic}': {payload}")
     if msg.topic != MQTT_CMD_TOPIC:
         return
-    # Accept any command starting with CAP (case‑insensitive)
     if payload.lower().startswith("cap"):
         _log("[BRIDGE] Capture command received via MQTT. Invoking MCU 'capture' function…")
         try:
-            # Trigger a measurement on the MCU.  The result is ignored; if
-            # the sketch encounters an error it will indicate that via
-            # subsequent log messages or by failing to send measurement data.
             bridge.call("capture")
         except Exception as e:
             _log(f"[BRIDGE] Error invoking 'capture': {e}")
@@ -164,23 +174,15 @@ mqtt_client.on_connect = _on_mqtt_connect
 mqtt_client.on_disconnect = _on_mqtt_disconnect
 mqtt_client.on_message = _on_mqtt_message
 
-# ─── Bridge Setup ────────────────────────────────────────────────────────
-
 bridge = Bridge()
 
-
 def linux_started() -> bool:
-    """Return True to indicate that the Python environment is ready."""
     return True
 
-
 def mcu_ready() -> None:
-    """Handler called by the MCU after its setup is complete."""
     _log("[BRIDGE] MCU signalled it is ready.")
 
-
 def _safe_float(value) -> Optional[float]:
-    """Convert a value to float or return None if invalid."""
     try:
         if value is None:
             return None
@@ -188,40 +190,21 @@ def _safe_float(value) -> Optional[float]:
     except (TypeError, ValueError):
         return None
 
-
 def _box_dim_from_raw(ref_cm: float, raw: Optional[float]) -> Optional[float]:
-    """Calculate the box dimension from a raw distance and a reference.
-
-    Returns ``None`` if the raw distance is not a finite number.  Clamps
-    negative results to zero (objects cannot have negative size).
-    """
     if raw is None or not math.isfinite(raw):
         return None
     box = ref_cm - raw
     return max(box, 0.0)
 
-
 def measurement_data(height_raw, width_raw, length_raw) -> None:
-    """Process raw sensor data from the MCU.
-
-    The MCU calls this function via ``Bridge.notify`` with three
-    arguments: height_raw, width_raw and length_raw (in centimetres).  The
-    handler computes box dimensions using the reference constants and
-    publishes a JSON payload to the MQTT broker.  All values are
-    included as separate fields to simplify downstream parsing.
-    """
     h_raw = _safe_float(height_raw)
     w_raw = _safe_float(width_raw)
     l_raw = _safe_float(length_raw)
-
     h_box = _box_dim_from_raw(REF_HEIGHT_CM, h_raw)
     w_box = _box_dim_from_raw(REF_WIDTH_CM, w_raw)
     l_box = _box_dim_from_raw(REF_LENGTH_CM, l_raw)
-
-    # Determine the maximum box dimension.  Use None if all are None.
     dims = [d for d in (h_box, w_box, l_box) if isinstance(d, float)]
     dimension_max = max(dims) if dims else None
-
     payload = {
         "height": h_box,
         "width": w_box,
@@ -240,50 +223,25 @@ def measurement_data(height_raw, width_raw, length_raw) -> None:
     except Exception as e:
         _log(f"[MQTT] Failed to publish measurement: {e}")
 
-
-# Register the bridge functions.  ``Bridge.provide`` associates a
-# callable with a name so that the MCU can call or notify it via RPC.
 bridge.provide("linux_started", linux_started)
 bridge.provide("mcu_ready", mcu_ready)
 bridge.provide("measurement_data", measurement_data)
 
-
 def _start_mqtt():
-    """Connect the MQTT client and start its network loop in a thread."""
     try:
         mqtt_client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
-        # Start a background thread to handle reconnections and message
-        # processing.  loop_start() returns immediately and spawns the
-        # network loop in a daemon thread.
         mqtt_client.loop_start()
     except Exception as e:
         _log(f"[MQTT] Failed to connect to broker at {MQTT_BROKER}:{MQTT_PORT}: {e}")
 
-
 def _user_loop() -> None:
-    """Periodic user loop passed to App.run.
-
-    The Router Bridge requires a user loop to keep the event loop alive.
-    This function also flushes pending log messages to the MQTT broker at
-    regular intervals.  The sleep ensures that the loop does not spin
-    continuously and hog the CPU.
-    """
-    # Drain any buffered log messages to MQTT.  If the client is not
-    # connected, messages will be dropped.
     _flush_log()
-    # Sleep for a short period to yield to other threads.
     time.sleep(0.1)
 
-
 def main() -> None:
-    """Entry point for the bridge script."""
     _log("[SYSTEM] UNO Q MQTT bridge starting…")
     _start_mqtt()
-    # Run the Bridge event loop.  This call blocks until the program is
-    # terminated.  The user_loop function is invoked repeatedly to
-    # perform auxiliary tasks such as draining logs.
     App.run(user_loop=_user_loop)
-
 
 if __name__ == "__main__":
     try:
@@ -293,7 +251,6 @@ if __name__ == "__main__":
     except Exception as exc:
         _log(f"[ERROR] Unhandled exception: {exc}")
     finally:
-        # Stop the MQTT loop and disconnect cleanly.
         try:
             mqtt_client.loop_stop()
             mqtt_client.disconnect()
