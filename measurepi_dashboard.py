@@ -37,7 +37,11 @@ import urllib.parse
 # MQTT broker configuration.  These defaults match the original MeasurePi
 # dashboard but can be overridden via environment variables.
 MQTT_BROKER = os.getenv("MQTT_BROKER", "localhost")
-MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
+try:
+    MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
+except ValueError:
+    print("[ERROR] Invalid value for MQTT_PORT, using default 1883.")
+    MQTT_PORT = 1883
 MQTT_TOPIC_SUB = os.getenv("MQTT_DATA_TOPIC", "measure/data")
 MQTT_TOPIC_LOG = os.getenv("MQTT_LOG_TOPIC", "measure/log")
 MQTT_COMMAND_TOPIC = os.getenv("MQTT_CMD_TOPIC", "measure/cmd")
