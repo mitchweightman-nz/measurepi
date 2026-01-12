@@ -63,6 +63,7 @@ import paho.mqtt.client as mqtt
 from arduino.app_utils import Bridge, App
 
 from collections import deque
+import html
 
 # ─── Configuration ───────────────────────────────────────────────────────
 
@@ -114,8 +115,24 @@ _log_buffer: deque[str] = deque()
 
 
 def _sanitize_log(msg: str) -> str:
-    # Replace newlines and carriage returns to avoid log injection; collapse control chars
-    return ''.join(c if c.isprintable() and c not in '\n\r' else ' ' for c in msg)
+    """Sanitize a log message before printing/publishing.
+
+    Replaces newline and carriage return characters with spaces and escapes
+    angle brackets to prevent log injection or HTML/script injection when
+    consumed by a dashboard. Non‑printable characters are also replaced with a space.
+    """
+    # Ensure message is str
+    msg_str = str(msg)
+    # Escape HTML special characters
+    escaped = html.escape(msg_str)
+    # Replace CR and LF with space and remove non-printable characters
+    sanitized_chars = []
+    for ch in escaped:
+        if ch in '\n\r' or not ch.isprintable():
+            sanitized_chars.append(' ')
+        else:
+            sanitized_chars.append(ch)
+    return ''.join(sanitized_chars)
 
 
 def _log(msg: str) -> None:
