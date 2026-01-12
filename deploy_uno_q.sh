@@ -28,7 +28,7 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Ensure apt is up‑to‑date and required tools are installed
 echo "Updating package lists and installing prerequisites..."
 sudo apt update -y
-sudo apt install -y python3 python3-pip git > /dev/null
+sudo apt install -y python3 python3-pip git
 
 # Check that arduino-app-cli exists on the system
 if ! command -v arduino-app-cli >/dev/null 2>&1; then
