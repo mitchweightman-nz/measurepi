@@ -86,6 +86,19 @@ arduino-app-cli app stop measurepi
 arduino-app-cli app start measurepi
 ```
 
+### Optional serial scale integration
+
+If you connect a serial scale to the UNO Q (USB/tty device), the bridge can
+append weight data to the MQTT payloads it publishes. Configure the serial
+port settings with these environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SERIAL_SCALE_PORT` | `/dev/ttyUSB0` | Serial device path for the scale. |
+| `SERIAL_SCALE_BAUDRATE` | `9600` | Baud rate for the serial scale. |
+| `ENABLE_SERIAL_SCALE` | `true` | Enable the serial scale reader. |
+| `SERIAL_SCALE_RECONNECT_DELAY` | `3` | Seconds to wait before reconnecting. |
+
 ## UNO Q App Structure
 
 Arduino App Lab expects a specific directory layout. This repository provides a ready-made `uno_q_app` directory:
