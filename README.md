@@ -104,6 +104,13 @@ uno_q_app/
 
 The `sketch.yaml` targets `arduino:zephyr:unoq` and includes the required libraries (TFLI2C, Adafruit NeoPixel, Arduino RouterBridge).
 
+## Legacy Hardware Files
+
+Older Raspberry Pi and UNO R4 WiFi assets have been moved into the `legacy/` directory:
+
+* `legacy/raspberry_pi/` contains the previous Raspberry Pi dashboard, SSL renewal helper, and deployment artifacts.
+* `legacy/uno_r4/` contains the UNO R4 WiFi sketches.
+
 ## Developing and Testing Locally
 
 You can run the Python dashboard and MQTT bridge on a regular computer for testing:
