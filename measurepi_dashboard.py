@@ -19,7 +19,7 @@ the simplified dashboard is sufficient.
 Version: Ver-2601111000
 """
 
-# ─── Standard library ────────────────────────────────────────────────────────
+# ─── Standard library ─────────────────────────────────────────
 import json
 import math
 import os
@@ -30,12 +30,12 @@ import html
 # collections.deque provides efficient FIFO buffers
 from collections import deque
 
-# ─── Third‑party libraries ──────────────────────────────────────────────────
+# ─── Third‑party libraries ──────────────────────────
 import paho.mqtt.client as mqtt
 from flask import Flask, jsonify, make_response, render_template, request
 import urllib.parse
 
-# ─── Configuration Constants ─────────────────────────────────────────────────
+# ─── Configuration Constants ─────────────────────────
 MQTT_BROKER = os.getenv("MQTT_BROKER", "localhost")
 try:
     MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
@@ -56,7 +56,7 @@ DEFAULT_ROUNDING_SETTINGS = {
     "width": "ceil",
 }
 
-# ─── Global State Variables ─────────────────────────────────────────────────
+# ─── Global State Variables ──────────────────────
 current_measurement = {}
 measurement_history = deque(maxlen=MAX_RAW_HISTORY)
 raw_mqtt_history = deque(maxlen=MAX_RAW_HISTORY)
@@ -70,7 +70,8 @@ pending_manual_weight_value = None
 
 mqtt_client = mqtt.Client(client_id=f"measurepi_dashboard_{os.getpid()}", protocol=mqtt.MQTTv311)
 
-# ─── Helper Functions ────────────────────────────────────────────────────────
+# ─── Helper Functions ─────────────────────
+
 def _safe_float(value):
     try:
         if value is None:
@@ -128,7 +129,8 @@ def _apply_rounding(measurements: dict) -> dict:
             rounded_measurements[key] = round(value, 1)
     return rounded_measurements
 
-# ─── MQTT Callbacks ─────────────────────────────────────────────────────────-
+# ─── MQTT Callbacks ────────────────────
+
 def _on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
         print(f"[MQTT] Connected successfully to broker {MQTT_BROKER}:{MQTT_PORT}.")
@@ -228,7 +230,7 @@ mqtt_client.on_connect = _on_connect
 mqtt_client.on_disconnect = _on_disconnect
 mqtt_client.on_message = _on_message
 
-# ─── Flask Web Application ───────────────────────────────────────────────────
+# ─── Flask Web Application ─────────────────────
 app = Flask(__name__)
 
 
@@ -269,6 +271,7 @@ def _merge_vary(response, values):
             merged_values.append(value)
     if merged_values:
         response.headers["Vary"] = ", ".join(merged_values)
+
 
 def _add_cors_headers(response):
     request_origin = request.headers.get("Origin")
@@ -509,7 +512,8 @@ def manual_weight_api_route():
         "weight": manual_weight_value,
     })
 
-# ─── Main Application Logic ───────────────────────────────────────────────────
+# ─── Main Application Logic ────────────────────
+
 def run_application():
     print("[SYSTEM] MeasurePi dashboard is starting up...")
     flask_port = max(7000, int(os.getenv("FLASK_PORT", os.getenv("PORT", 7000))))
