@@ -26,7 +26,8 @@ import os
 import threading
 import time
 import traceback
-from pathlib import Path
+# collections.deque provides efficient FIFO buffers
+from collections import deque
 
 # ─── Third‑party libraries ──────────────────────────────────────────────────
 import paho.mqtt.client as mqtt
@@ -34,8 +35,6 @@ from flask import Flask, jsonify, make_response, render_template, request
 import urllib.parse
 
 # ─── Configuration Constants ─────────────────────────────────────────────────
-# MQTT broker configuration.  These defaults match the original MeasurePi
-# dashboard but can be overridden via environment variables.
 MQTT_BROKER = os.getenv("MQTT_BROKER", "localhost")
 try:
     MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
@@ -49,9 +48,7 @@ MQTT_COMMAND_TOPIC = os.getenv("MQTT_CMD_TOPIC", "measure/cmd")
 # Number of raw MQTT payloads and log messages to keep in memory
 MAX_RAW_HISTORY = 200
 
-# Rounding rules for box dimensions; keys are axis names and values are
-# rounding modes: "ceil", "floor", "none" or an integer number of decimal
-# places.
+# Rounding rules for box dimensions
 DEFAULT_ROUNDING_SETTINGS = {
     "height": "ceil",
     "length": "ceil",
@@ -60,14 +57,12 @@ DEFAULT_ROUNDING_SETTINGS = {
 
 # ─── Global State Variables ─────────────────────────────────────────────────
 current_measurement = {}
-measurement_history = []
-raw_mqtt_history = []
-measure_log_history = []
+measurement_history = deque(maxlen=MAX_RAW_HISTORY)
+raw_mqtt_history = deque(maxlen=MAX_RAW_HISTORY)
+measure_log_history = deque(maxlen=MAX_RAW_HISTORY)
 _data_lock = threading.Lock()
 rounding_settings = DEFAULT_ROUNDING_SETTINGS.copy()
 
-# Track whether an external scale is detected; in this simplified version we
-# assume no serial scale is connected.  The flag may be set via MQTT data.
 scale_present_flag = None
 awaiting_manual_weight = False
 pending_manual_weight_value = None
@@ -76,7 +71,6 @@ mqtt_client = mqtt.Client(client_id=f"measurepi_dashboard_{os.getpid()}", protoc
 
 # ─── Helper Functions ────────────────────────────────────────────────────────
 def _safe_float(value):
-    """Return a float if the input is numeric-like, otherwise return None."""
     try:
         if value is None:
             return None
@@ -93,7 +87,6 @@ def _safe_float(value):
 
 
 def _safe_int(value):
-    """Return an integer if the input is int-like, otherwise return None."""
     try:
         if value is None:
             return None
@@ -110,7 +103,6 @@ def _safe_int(value):
 
 
 def _apply_rounding(measurements: dict) -> dict:
-    """Apply rounding rules to the height, width and length values."""
     if not isinstance(measurements, dict):
         return {}
     rounded_measurements = measurements.copy()
@@ -129,16 +121,13 @@ def _apply_rounding(measurements: dict) -> dict:
                 precision = int(rule)
                 rounded_measurements[key] = round(value, precision)
             else:
-                # default to one decimal place if rule is unrecognized
                 rounded_measurements[key] = round(value, 1)
         except Exception:
             rounded_measurements[key] = round(value, 1)
     return rounded_measurements
 
-
-# ─── MQTT Callbacks ──────────────────────────────────────────────────────────
+# ─── MQTT Callbacks ─────────────────────────────────────────────────────────-
 def _on_connect(client, userdata, flags, rc, properties=None):
-    """Handle successful or failed connection to the MQTT broker."""
     if rc == 0:
         print(f"[MQTT] Connected successfully to broker {MQTT_BROKER}:{MQTT_PORT}.")
         client.subscribe(MQTT_TOPIC_SUB)
@@ -153,9 +142,8 @@ def _on_disconnect(client, userdata, rc, properties=None):
 
 
 def _on_message(client, userdata, msg):
-    """Process incoming MQTT messages for measurement data and logs."""
     global scale_present_flag, awaiting_manual_weight, pending_manual_weight_value
-    # Data messages from the UNO Q bridge
+    # Data messages
     if msg.topic == MQTT_TOPIC_SUB:
         try:
             payload_str = msg.payload.decode("utf-8")
@@ -170,44 +158,46 @@ def _on_message(client, userdata, msg):
                 return None
 
             single_dimension = pick_dimension_value(["dimension", "dimension_cm", "dim"])
+            h_candidate = pick_dimension_value(["height", "height_box", "height_cm"])
+            w_candidate = pick_dimension_value(["width", "width_box", "width_cm"])
+            l_candidate = pick_dimension_value(["length", "length_box", "length_cm"])
             new_measurements = {
-                "height": pick_dimension_value(["height", "height_box", "height_cm"]) or single_dimension,
-                "width": pick_dimension_value(["width", "width_box", "width_cm"]) or single_dimension,
-                "length": pick_dimension_value(["length", "length_box", "length_cm"]) or single_dimension,
+                "height": h_candidate if h_candidate is not None else single_dimension,
+                "width": w_candidate if w_candidate is not None else single_dimension,
+                "length": l_candidate if l_candidate is not None else single_dimension,
                 "timestamp": timestamp,
             }
-            # Bail out if no dimensions were provided
             if all(new_measurements.get(axis) is None for axis in ("height", "width", "length")):
                 print(f"[MQTT] Warning: Received data missing dimension values. Data: {data}")
                 return
-
-            # Optional weight fields; preserve net/gross if present
             new_measurements["weight"] = _safe_float(data.get("weight"))
             new_measurements["weight_net"] = _safe_float(data.get("weight_net"))
             new_measurements["weight_gross"] = _safe_float(data.get("weight_gross"))
             new_measurements["tare_g"] = _safe_int(data.get("tare_g"))
-
-            have_scale = any(
-                new_measurements.get(key) is not None for key in ("weight", "weight_net", "weight_gross", "tare_g")
-            )
+            have_scale = any(new_measurements.get(key) is not None for key in ("weight", "weight_net", "weight_gross", "tare_g"))
             new_measurements["scale_present"] = have_scale
-
-            # Copy additional metadata fields if present
             for meta_key in ["manual_weight", "manual_weight_required", "manual_weight_timestamp"]:
                 if meta_key in data:
                     new_measurements[meta_key] = data[meta_key]
-
+            # Apply a pending manual weight if present and the measurement has no weight
             with _data_lock:
+                if pending_manual_weight_value is not None and new_measurements.get("weight") is None:
+                    ts = time.time()
+                    mw = pending_manual_weight_value
+                    new_measurements["weight"] = mw
+                    new_measurements["weight_net"] = mw
+                    new_measurements["weight_gross"] = mw
+                    new_measurements["manual_weight"] = True
+                    new_measurements["manual_weight_timestamp"] = ts
+                    new_measurements["manual_weight_required"] = False
+                    new_measurements["scale_present"] = False
+                    pending_manual_weight_value = None
+                    scale_present_flag = False
                 current_measurement.clear()
                 current_measurement.update(new_measurements)
                 measurement_history.append(new_measurements.copy())
-                if len(measurement_history) > MAX_RAW_HISTORY:
-                    measurement_history.pop(0)
-                raw_mqtt_history.append(payload_str)
-                if len(raw_mqtt_history) > MAX_RAW_HISTORY:
-                    raw_mqtt_history.pop(0)
-
-            scale_present_flag = have_scale
+                raw_mqtt_history.append(payload_str.replace("\n"," ").replace("\r"," "))
+                scale_present_flag = have_scale
         except json.JSONDecodeError:
             print(f"[MQTT] Error decoding JSON: {msg.payload!r}")
         except Exception as e:
@@ -218,11 +208,9 @@ def _on_message(client, userdata, msg):
             payload_str = msg.payload.decode("utf-8", errors="replace")
         except Exception:
             payload_str = repr(msg.payload)
-        entry = {"topic": msg.topic, "payload": payload_str, "timestamp": time.time()}
+        entry = {"topic": msg.topic, "payload": payload_str.replace("\n"," ").replace("\r"," "), "timestamp": time.time()}
         with _data_lock:
             measure_log_history.append(entry)
-            if len(measure_log_history) > MAX_RAW_HISTORY:
-                measure_log_history.pop(0)
     else:
         try:
             payload_str = msg.payload.decode("utf-8", errors="replace")
@@ -230,8 +218,6 @@ def _on_message(client, userdata, msg):
             payload_str = repr(msg.payload)
         print(f"[MQTT] Received message on unexpected topic '{msg.topic}': {payload_str}")
 
-
-# Attach callbacks to the MQTT client
 mqtt_client.on_connect = _on_connect
 mqtt_client.on_disconnect = _on_disconnect
 mqtt_client.on_message = _on_message
@@ -258,9 +244,9 @@ def _parse_allowed_origins():
             allowed.add(trimmed.lower())
     return allowed
 
-
-_ALLOWED_ORIGINS = _parse_allowed_origins()
-
+_ALOWED_ORIGINS_TEMP = _parse_allowed_origins()
+# maintain case-insensitive set
+_ALLOWED_ORIGINS = set(o.lower() for o in _ALOWED_ORIGINS_TEMP)
 
 def _is_origin_allowed(origin):
     if not origin:
@@ -268,7 +254,6 @@ def _is_origin_allowed(origin):
     if not _ALLOWED_ORIGINS:
         return True
     return origin.lower() in _ALLOWED_ORIGINS
-
 
 def _merge_vary(response, values):
     existing = response.headers.get("Vary", "")
@@ -278,7 +263,6 @@ def _merge_vary(response, values):
             merged_values.append(value)
     if merged_values:
         response.headers["Vary"] = ", ".join(merged_values)
-
 
 def _add_cors_headers(response):
     request_origin = request.headers.get("Origin")
@@ -297,7 +281,6 @@ def _add_cors_headers(response):
     _merge_vary(response, ["Origin", "Referer"])
     return response
 
-
 @app.before_request
 def handle_options_request():
     if request.method == "OPTIONS":
@@ -305,33 +288,26 @@ def handle_options_request():
         return _add_cors_headers(response)
     return None
 
-
 @app.after_request
 def add_cors_headers(response):
     return _add_cors_headers(response)
 
-
 @app.route("/")
 def index_route():
-    """Render a simple landing page indicating the API is running."""
     return render_template("index.html")
-
 
 @app.route("/json")
 def json_data_route():
-    """Return the current and recent measurement history as JSON."""
     with _data_lock:
         current_data_copy = current_measurement.copy() if current_measurement else {}
-        history_to_send = [item.copy() for item in measurement_history[-20:]]
+        history_to_send = [item.copy() for item in list(measurement_history)[-20:]]
     current_rounded = _apply_rounding(current_data_copy)
-    # Round weight fields to 3 decimals
     for key in ["weight", "weight_net", "weight_gross"]:
         value = current_data_copy.get(key)
         if isinstance(value, (int, float)):
             current_rounded[key] = round(value, 3)
         elif value is None:
             current_rounded[key] = None
-    # Derive dimension from the largest axis
     dimension_candidates = [
         v
         for v in [
@@ -344,7 +320,6 @@ def json_data_route():
         if isinstance(v, (int, float))
     ]
     current_rounded["dimension"] = max(dimension_candidates) if dimension_candidates else None
-    # Copy metadata if present
     if "tare_g" in current_data_copy:
         tare_value = current_data_copy.get("tare_g")
         current_rounded["tare_g"] = int(tare_value) if isinstance(tare_value, (int, float)) else None
@@ -353,19 +328,15 @@ def json_data_route():
             current_rounded[meta_key] = current_data_copy[meta_key]
     return jsonify({"current": current_rounded, "history": history_to_send})
 
-
 @app.route("/api/raw")
 def raw_mqtt_history_route():
-    """Return the raw MQTT payloads and log messages received."""
     with _data_lock:
         raw_data_list = list(raw_mqtt_history)
         log_data_list = [entry.copy() for entry in measure_log_history]
     return jsonify({"raw_mqtt_payloads": raw_data_list, "log_messages": log_data_list})
 
-
 @app.route("/api/settings", methods=["GET", "POST"])
 def settings_api_route():
-    """Get or update rounding settings for height, width and length."""
     global rounding_settings
     if request.method == "GET":
         with _data_lock:
@@ -396,10 +367,8 @@ def settings_api_route():
     else:
         return jsonify({"status": "no valid changes applied", "current_settings": rounding_settings}), 200
 
-
 @app.route("/api/lcd_text")
 def lcd_text_api_route():
-    """Return a multi-line string representing what would be shown on the LCD."""
     with _data_lock:
         current_data_copy = current_measurement.copy() if current_measurement else {}
     if not current_data_copy:
@@ -417,18 +386,14 @@ def lcd_text_api_route():
     lcd_l4 = time.strftime("%H:%M:%S", time.localtime(timestamp))[:20]
     return f"{lcd_l1}\n{lcd_l2}\n{lcd_l3}\n{lcd_l4}"
 
-
 @app.route("/api/measurements_current")
 def current_measurements_api_route():
-    """Return the latest measurement object as JSON."""
     with _data_lock:
         measurements_copy = current_measurement.copy()
     return jsonify(measurements_copy)
 
-
 @app.route("/api/command", methods=["POST"])
 def command_api_route():
-    """Publish an arbitrary command string to the MQTT command topic."""
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
     payload = request.get_json()
@@ -443,10 +408,8 @@ def command_api_route():
         print(f"[API-CMD] Failed to send command '{command_to_send}': MQTT client not connected.")
         return jsonify({"status": "error", "message": "MQTT client not connected"}), 503
 
-
 @app.route("/api/capture", methods=["POST"])
 def capture_api_route():
-    """Request a new measurement from the UNO Q bridge via MQTT."""
     global awaiting_manual_weight
     with _data_lock:
         current_scale_state = scale_present_flag
@@ -470,10 +433,8 @@ def capture_api_route():
         print("[API-CAPTURE] Failed to publish capture command: MQTT client not connected.")
         return jsonify({"status": "error", "message": "MQTT client not connected"}), 503
 
-
 @app.route("/api/manual_weight", methods=["POST"])
 def manual_weight_api_route():
-    """Accept a user‑submitted weight when a physical scale is unavailable."""
     global pending_manual_weight_value, awaiting_manual_weight, scale_present_flag
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
@@ -505,7 +466,10 @@ def manual_weight_api_route():
                 applied_immediately = True
         if measurement_history:
             last_entry = measurement_history[-1]
-            last_weight = last_entry.get("weight") if isinstance(last_entry, dict) else None
+            if isinstance(last_entry, dict):
+                last_weight = last_entry.get("weight")
+            else:
+                last_weight = None
             if not isinstance(last_weight, (int, float)):
                 last_entry["weight"] = manual_weight_value
                 last_entry["weight_net"] = manual_weight_value
@@ -525,14 +489,11 @@ def manual_weight_api_route():
         "weight": manual_weight_value,
     })
 
-
 # ─── Main Application Logic ───────────────────────────────────────────────────
 def run_application():
-    """Start the MQTT client and Flask server."""
     print("[SYSTEM] MeasurePi dashboard is starting up...")
     flask_port = max(7000, int(os.getenv("FLASK_PORT", os.getenv("PORT", 7000))))
     try:
-        # Connect MQTT client
         if MQTT_BROKER:
             try:
                 print(f"[MQTT] Connecting to broker at {MQTT_BROKER}:{MQTT_PORT}...")
@@ -542,7 +503,6 @@ def run_application():
                 print(f"[ERROR] MQTT connection to {MQTT_BROKER}:{MQTT_PORT} failed: {e}")
         else:
             print("[MQTT] MQTT_BROKER not configured. MQTT features disabled.")
-        # Run Flask app without SSL on UNO Q (SSL can be added if certs are installed)
         print(f"[SYSTEM] Starting Flask web server on http://0.0.0.0:{flask_port}...")
         app.run(host="0.0.0.0", port=flask_port, threaded=True, debug=False)
     except KeyboardInterrupt:
@@ -563,7 +523,6 @@ def run_application():
         except Exception:
             pass
         print("[SYSTEM] MeasurePi dashboard has shut down.")
-
 
 if __name__ == "__main__":
     run_application()
