@@ -49,7 +49,7 @@ static const uint8_t  TCA_CH_TF2   = 3;
 static const uint8_t  TCA_CH_TF3   = 4;
 
 // TF‑Luna sampling
-static const uint8_t  SAMPLES_PER_SENSOR   = 6;
+static const uint8_t  SAMPLES_PER_SENSOR    = 6;
 static const uint16_t DRDY_TIMEOUT_MS      = 50;
 
 // Laser policy
@@ -167,18 +167,6 @@ static void logf(const char* fmt, ...) {
   vsnprintf(line, sizeof(line), fmt, ap);
   va_end(ap);
   logLine(line);
-}
-
-static bool equalsIgnoreCase(const char* a, const char* b) {
-  if (!a || !b) return false;
-  while (*a && *b) {
-    char ca = *a, cb = *b;
-    if (ca >= 'A' && ca <= 'Z') ca += 32;
-    if (cb >= 'A' && cb <= 'Z') cb += 32;
-    if (ca != cb) return false;
-    ++a; ++b;
-  }
-  return *a == 0 && *b == 0;
 }
 
 /* --------------------------- NeoPixel status ------------------------- */
@@ -361,7 +349,6 @@ static int16_t tflAverageOnCh(uint8_t ch, uint8_t rtsPin, uint8_t addr) {
 
 // Triggered from Python: request a new capture
 static void bridgeCapture() {
-  // Simply set the capture flag; main loop handles measurement
   g_trigCapture = true;
 }
 
@@ -376,7 +363,6 @@ static float boxDimFromRaw(float ref_cm, float raw_cm) {
 }
 
 static void notifyMeasurement(float h_raw,float w_raw,float l_raw) {
-  // Prepare payload: values are sent as floats; the Python side computes box dims
   Bridge.notify("measurement_data", h_raw, w_raw, l_raw);
 }
 
@@ -399,27 +385,25 @@ static void startCapture() {
   float boxW = boxDimFromRaw(REF_WIDTH_CM,  width_cm);
   logf("[CAPTURE] Box dims L=%.1f H=%.1f W=%.1f (cm)", boxL, boxH, boxW);
   notifyMeasurement(height_cm, width_cm, length_cm);
-  // Update measurement status LED (pixel 7)
   if (okCapture) {
     g_measState = MEAS_DONE;
   } else {
     g_measState = MEAS_ERROR;
   }
-  g_measStateUntilMs = millis() + 1000;  // keep DONE/ERROR for 1s, then back to WAITING
+  g_measStateUntilMs = millis() + 1000;
 }
 
 /* --------------------- Background box monitor ------------------------ */
 
 static bool changedFrac(float oldV, float newV) {
   if (!isfinite(oldV) || !isfinite(newV)) return false;
-  if (oldV == 0.0f) return false;  // avoid division nonsense
+  if (oldV == 0.0f) return false;
   float diff = fabsf(newV - oldV);
   float frac = diff / fabsf(oldV);
   return (frac >= DIM_CHANGE_FRACTION);
 }
 
 static void monitorBoxPlacement() {
-  // Read current dimensions (raw distances in cm)
   int16_t length_cm_i = tflAverageOnCh(TCA_CH_TF1, PIN_RTS_1, TFLUNA_ADDR);
   int16_t height_cm_i = tflAverageOnCh(TCA_CH_TF2, PIN_RTS_2, TFLUNA_ADDR);
   int16_t width_cm_i  = tflAverageOnCh(TCA_CH_TF3, PIN_RTS_3, TFLUNA_ADDR);
@@ -436,7 +420,6 @@ static void monitorBoxPlacement() {
   float length_cm = (float)length_cm_i;
   float height_cm = (float)height_cm_i;
   float width_cm  = (float)width_cm_i;
-  // LIVE MODE: when A0 is LOW, periodically print current raw + box dims
   if (digitalRead(PIN_LIVE_MODE) == LOW) {
     if ((int32_t)(millis() - g_nextLivePrintMs) >= 0) {
       float liveBoxL = boxDimFromRaw(REF_LENGTH_CM, length_cm);
@@ -444,13 +427,10 @@ static void monitorBoxPlacement() {
       float liveBoxW = boxDimFromRaw(REF_WIDTH_CM,  width_cm);
       logf("[LIVE] raw L=%.1f H=%.1f W=%.1f (cm)", length_cm, height_cm, width_cm);
       logf("[LIVE] box L=%.1f H=%.1f W=%.1f (cm)", liveBoxL, liveBoxH, liveBoxW);
-      g_nextLivePrintMs = millis() + 200;  // 5 Hz print rate
+      g_nextLivePrintMs = millis() + 200;
     }
   }
-  // First valid reading seeds the "last" state, no laser
-  if (!isfinite(g_lastHeightCm) ||
-      !isfinite(g_lastWidthCm)  ||
-      !isfinite(g_lastLengthCm)) {
+  if (!isfinite(g_lastHeightCm) || !isfinite(g_lastWidthCm)  || !isfinite(g_lastLengthCm)) {
     g_lastHeightCm = height_cm;
     g_lastWidthCm  = width_cm;
     g_lastLengthCm = length_cm;
@@ -469,7 +449,6 @@ static void monitorBoxPlacement() {
          (unsigned)LASER_ON_MS);
     laserTrigger(LASER_ON_MS);
   }
-  // Update last‑known dimensions
   g_lastHeightCm = height_cm;
   g_lastWidthCm  = width_cm;
   g_lastLengthCm = length_cm;
@@ -486,14 +465,13 @@ void setup() {
   pinMode(PIN_RTS_2, INPUT_PULLUP);
   pinMode(PIN_RTS_3, INPUT_PULLUP);
   btnCapture.begin(PIN_CAPTURE_IN, /*debounce ms*/30);
-  pinMode(PIN_LIVE_MODE, INPUT_PULLUP);  // A0 live‑mode switch
+  pinMode(PIN_LIVE_MODE, INPUT_PULLUP);
   laserBegin(PIN_LASER_OUT);
   statusLedsBegin();
   logf("[GPIO] CAP button D%u, NeoPixel on D%u, live mode A0", PIN_CAPTURE_IN, NEOPIXEL_PIN);
   Wire.begin();
   Wire.setClock(I2C_CLOCK_HZ);
   logf("[I2C] Started at %lu Hz", (unsigned long)I2C_CLOCK_HZ);
-  // TCA presence
   Wire.beginTransmission(TCA_ADDR);
   if (Wire.endTransmission() != 0) {
     logLine("[TCA] ERROR: TCA9548A not found at 0x70");
@@ -502,26 +480,21 @@ void setup() {
     logLine("[TCA] Found TCA9548A at 0x70");
     g_tcaPresent = true;
   }
-  // TF‑Luna init per channel
   tflInitOnCh(TCA_CH_TF1, TFLUNA_ADDR, "TF1(Length)", g_tfInit1Ok);
   tflInitOnCh(TCA_CH_TF2, TFLUNA_ADDR, "TF2(Height)", g_tfInit2Ok);
   tflInitOnCh(TCA_CH_TF3, TFLUNA_ADDR, "TF3(Width)",  g_tfInit3Ok);
-  // Start the RPC Bridge
   Bridge.begin();
-  // Wait until python side reports readiness via linux_started()
   delay(2000);
   bool start = false;
   while (!start) {
     Bridge.call("linux_started").result(start);
     delay(200);
   }
-  // Provide capture trigger to python; python can call capture() to initiate measurement
   Bridge.provide("capture", bridgeCapture);
-  // Inform python that MCU has booted
   Bridge.notify("mcu_ready");
   logLine("# Ready. UNO‑Q Bridge initialised.");
   g_nextHeartbeatMs = millis() + 2000;
-  g_nextMonitorMs   = millis() + 1000;  // give I2C board ~1 s before first monitor
+  g_nextMonitorMs   = millis() + 1000;
   g_nextLivePrintMs = millis();
   g_measState       = MEAS_WAITING;
   g_measStateUntilMs= 0;
@@ -530,35 +503,29 @@ void setup() {
 /* -------------------------------- Loop ------------------------------- */
 
 void loop() {
-  // Process pending Bridge messages; this call processes asynchronous RPC events
   Bridge.loop();
   laserLoop();
-  // Measurement state timeout (drop DONE/ERROR back to WAITING)
   if (g_measState == MEAS_DONE || g_measState == MEAS_ERROR) {
     if ((int32_t)(millis() - g_measStateUntilMs) >= 0) {
       g_measState = MEAS_WAITING;
     }
   }
   statusLedsUpdate();
-  // Button triggers (shared path with Bridge)
   if (btnCapture.pressedEdge()) {
     logLine("[BTN] CAPTURE pressed");
     g_trigCapture = true;
   }
-  // Background dimension monitor (auto‑laser logic + live mode)
   if ((int32_t)(millis() - g_nextMonitorMs) >= 0) {
     monitorBoxPlacement();
     g_nextMonitorMs = millis() + MONITOR_INTERVAL_MS;
   }
-  // Heartbeat log (software)
   if ((int32_t)(millis() - g_nextHeartbeatMs) >= 0) {
     logf("[SYS] alive laser=%u", g_laserOn);
     g_nextHeartbeatMs = millis() + 2000;
   }
-  // CAPTURE command handling
   if (g_trigCapture) {
     g_trigCapture = false;
-    g_measState   = MEAS_RUNNING;   // measurement in progress → purple on Pixel 7
+    g_measState   = MEAS_RUNNING;
     logLine("[CAPTURE] Command accepted");
     startCapture();
   }
