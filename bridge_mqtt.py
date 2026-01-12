@@ -26,7 +26,7 @@ reference distances used for calculating the box size:
   ``measure/log``)
 • ``MQTT_CLIENT_ID`` – MQTT client identifier (default ``uno-q-bridge``)
 • ``REF_LENGTH_CM``, ``REF_HEIGHT_CM``, ``REF_WIDTH_CM`` – reference
-  distances, in centimetres, measured from each sensor to the back wall
+distances, in centimetres, measured from each sensor to the back wall
   with no box present (defaults mirror the UNO R4 sketch values)
 
 The script registers the following bridge functions for use by the
@@ -40,7 +40,7 @@ microcontroller sketch:
 • ``measurement_data`` – invoked by the sketch via ``Bridge.notify``
   with three arguments: ``height_raw``, ``width_raw`` and
   ``length_raw`` (in centimetres).  The handler computes box
-  dimensions, assembles a JSON payload and publishes it to
+dimensions, assembles a JSON payload and publishes it to
   ``MQTT_DATA_TOPIC``.
 
 Upon receiving a message on ``MQTT_CMD_TOPIC`` containing the word
@@ -65,7 +65,7 @@ from arduino.app_utils import Bridge, App
 from collections import deque
 import html
 
-# ─── Configuration ───────────────────────────────────────────────────────
+# ─── Configuration ─────────────────────────────────────────
 
 def _get_int_env(name: str, default: int) -> int:
     raw = os.getenv(name)
