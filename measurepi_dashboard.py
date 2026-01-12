@@ -26,6 +26,7 @@ import os
 import threading
 import time
 import traceback
+import html
 # collections.deque provides efficient FIFO buffers
 from collections import deque
 
@@ -122,7 +123,8 @@ def _apply_rounding(measurements: dict) -> dict:
                 rounded_measurements[key] = round(value, precision)
             else:
                 rounded_measurements[key] = round(value, 1)
-        except Exception:
+        except (TypeError, ValueError):
+            # Only catch numeric conversion errors; let unexpected bugs surface
             rounded_measurements[key] = round(value, 1)
     return rounded_measurements
 
@@ -196,7 +198,9 @@ def _on_message(client, userdata, msg):
                 current_measurement.clear()
                 current_measurement.update(new_measurements)
                 measurement_history.append(new_measurements.copy())
-                raw_mqtt_history.append(payload_str.replace("\n"," ").replace("\r"," "))
+                # Sanitize raw MQTT payload to avoid injection: escape HTML and strip newlines
+                sanitized_raw = html.escape(payload_str).replace("\n", " ").replace("\r", " ")
+                raw_mqtt_history.append(sanitized_raw)
                 scale_present_flag = have_scale
         except json.JSONDecodeError:
             print(f"[MQTT] Error decoding JSON: {msg.payload!r}")
@@ -208,7 +212,9 @@ def _on_message(client, userdata, msg):
             payload_str = msg.payload.decode("utf-8", errors="replace")
         except Exception:
             payload_str = repr(msg.payload)
-        entry = {"topic": msg.topic, "payload": payload_str.replace("\n"," ").replace("\r"," "), "timestamp": time.time()}
+        # Sanitize log payload to prevent stored XSS/log injection
+        sanitized_payload = html.escape(payload_str).replace("\n", " ").replace("\r", " ")
+        entry = {"topic": msg.topic, "payload": sanitized_payload, "timestamp": time.time()}
         with _data_lock:
             measure_log_history.append(entry)
     else:
@@ -280,6 +286,20 @@ def _add_cors_headers(response):
     response.headers["Access-Control-Allow-Methods"] = request_method if request_method else "GET, POST, OPTIONS"
     _merge_vary(response, ["Origin", "Referer"])
     return response
+
+@app.before_request
+def csrf_protect():
+    """Simple CSRF prevention: only allow state‑changing requests from allowed origins.
+
+    This checks the Origin header (or Referer if Origin is absent) for POST/PUT/DELETE
+    requests and rejects the request if the origin is not in the allowed list.
+    """
+    if request.method in {"POST", "PUT", "DELETE"}:
+        origin = request.headers.get("Origin") or _extract_origin_from_referer(request.headers.get("Referer"))
+        if not _is_origin_allowed(origin):
+            return jsonify({"error": "CSRF validation failed"}), 403
+    # return None to continue processing
+    return None
 
 @app.before_request
 def handle_options_request():
