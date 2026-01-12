@@ -1,0 +1,5 @@
+fqbn: arduino:zephyr:unoq
+libraries:
+  - TFLI2C
+  - Adafruit NeoPixel
+  - Arduino RouterBridge
