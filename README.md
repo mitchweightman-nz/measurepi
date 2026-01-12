@@ -3,9 +3,9 @@ MeasurePi UNO Q Measurement Rig
 
 This repository contains aself‑contained application for the **Arduino UNO Q** board thatmeasures parcel dimensions using three TF‑Luna time‑of‑flight sensors, providesa simple web dashboard and publishes the results over MQTT. The project issplit into two components:
 
-1.      **Microcontroller sketch (measure\_uno\_q.ino)** – runs on the STM32U585 microcontroller and handles the low‑leveltiming, laser control, sensor multiplexing and state‑machine logic. The sketchcommunicates with the Linux side of the UNO Q via the Router Bridge RPCinterface. The same code is included under uno\_q\_app/sketch/sketch.ino so that it is automatically built as part of the UNO Q app.
+1.      **Microcontroller sketch (measure\_uno\_q.ino)** – runs on the STM32U585 microcontroller and handles the low‑leveltiming, laser control, sensor multiplexing          and state‑machine logic. The sketchcommunicates with the Linux side of the UNO Q via the Router Bridge RPCinterface. The same code is included under                  uno\_q\_app/sketch/sketch.ino so that it is automatically built as part of the UNO Q app.
 
-2.      **Python application** – runs on the embeddedDebian system (MPU) and uses the paho‑mqtt and Flask libraries topublish measurements to an MQTT broker and serve a dashboard. The entry pointis uno\_q\_app/python/main.py (a copy of bridge\_mqtt.py), which interacts with the microcontroller via arduino.app\_utils.
+2.      **Python application** – runs on the embeddedDebian system (MPU) and uses the paho‑mqtt and Flask libraries topublish measurements to an MQTT broker and              serve a dashboard. The entry pointis uno\_q\_app/python/main.py (a copy of bridge\_mqtt.py), which interacts with the microcontroller via arduino.app\_utils.
 
 The project can be deployed on astandard Raspberry Pi, but this document focuses on installing it on anArduino UNO Q using Arduino App Lab.
 
@@ -24,9 +24,11 @@ Prerequisites
 
 ·      Access to an MQTT broker (locallyor remotely). You may adjust broker settings via environment variables asdescribed below.
 
-·      Network access on the UNO Qto run apt commands. The Arduino documentationnotes that installing software on the UNO Q is done using the standardDebian package manager, e.g. sudo apt installpackage-name[\[1\]](https://docs.arduino.cc/tutorials/uno-q/debian-guide/). In ourdeployment script we use sudo apt update and sudo apt install python3 python3-pip git toensure the Python runtime and Git are available[\[2\]](https://docs.arduino.cc/tutorials/uno-q/debian-guide/#package-management).
+·      Network access on the UNO Qto run apt commands. The Arduino documentationnotes that installing software on the UNO Q is done using the standardDebian package         manager, e.g. sudo apt installpackage-name[\[1\]](https://docs.arduino.cc/tutorials/uno-q/debian-guide/). In ourdeployment script we use sudo apt update and          sudo apt install python3 python3-pip git toensure the Python runtime and Git are available
+       [\[2\]](https://docs.arduino.cc/tutorials/uno-q/debian-guide/#package-management).
 
-·      The **Arduino App CLI**(arduino-app-cli), which is pre‑installed onUNO Q images. It allows creating, building and managing apps directly onthe device. The official documentation demonstrates how to create an app, buildit and start/stop it using commands such as arduino-app-cli appnew, arduino-app-cli appbuild and arduino-app-cli appstart[\[3\]](https://docs.arduino.cc/software/app-lab/tutorials/cli/#using-arduino-app-cli).
+·      The **Arduino App CLI**(arduino-app-cli), which is pre‑installed onUNO Q images. It allows creating, building and managing apps directly onthe device. The            official documentation demonstrates how to create an app, buildit and start/stop it using commands such as arduino-app-cli appnew, arduino-app-cli appbuild           and arduino-app-cli appstart
+       [\[3\]](https://docs.arduino.cc/software/app-lab/tutorials/cli/#using-arduino-app-cli).
 
 Deploymenton UNO Q
 ------------------
@@ -51,10 +53,10 @@ The repository includes a helper script, deploy\_uno\_q.sh, that automatesinstal
 
 6.     Install Python dependencies listedin uno\_q\_app/python/requirements.txt using pip.
 
-2.  Build the app (arduino-app-cli app build measurepi) and start it (arduino-app-cli app start measurepi). You can monitor logs with arduino-app-cli app logs measurepi.
+6.     Build the app (arduino-app-cli app build measurepi) and start it (arduino-app-cli app start measurepi).
+       You can monitor logs with arduino-app-cli app logs measurepi.
     
-
-4.  **Configure MQTT and reference dimensions** (optional). The application reads a number of environment variables to allow configuration without editing code:
+7.  **Configure MQTT and reference dimensions** (optional). The application reads a number of environment variables to allow configuration without editing code:
     
 
 Variable
