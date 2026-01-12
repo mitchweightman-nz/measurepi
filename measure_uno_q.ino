@@ -3,7 +3,7 @@
  *
  * This sketch runs on the STM32U585 MCU of the Arduino UNO Q board and
  * provides real‑time control of three TF‑Luna time‑of‑flight range finders
- * connected via a TCA9548A I2C multiplexer.  It implements the same
+ * connected directly on I2C with unique addresses.  It implements the same
  * measurement and laser logic as the UNO R4 WiFi version, but instead of
  * publishing over MQTT directly it communicates with the Linux side of
  * the UNO Q via the Router Bridge RPC interface.  A companion Python
@@ -38,15 +38,11 @@ static const uint8_t PIN_RTS_1 = 4;  // Length
 static const uint8_t PIN_RTS_2 = 5;  // Height
 static const uint8_t PIN_RTS_3 = 6;  // Width
 
-// I2C / TCA9548A
-static const uint8_t  TCA_ADDR     = 0x70;
-static const uint8_t  TFLUNA_ADDR  = 0x10;    // TF‑Luna default
+// I2C addresses (unique per TF‑Luna)
+static const uint8_t  TFLUNA_ADDR_HEIGHT = 0x10;
+static const uint8_t  TFLUNA_ADDR_WIDTH  = 0x20;
+static const uint8_t  TFLUNA_ADDR_LENGTH = 0x30;
 static const uint32_t I2C_CLOCK_HZ = 50000;  // conservative
-
-// TCA channels
-static const uint8_t  TCA_CH_TF1   = 2;
-static const uint8_t  TCA_CH_TF2   = 3;
-static const uint8_t  TCA_CH_TF3   = 4;
 
 // TF‑Luna sampling
 static const uint8_t  SAMPLES_PER_SENSOR    = 6;
@@ -88,7 +84,6 @@ static Adafruit_NeoPixel strip(NEOPIXEL_COUNT, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ80
 static volatile bool g_trigCapture = false;   // shared trigger from Bridge or button
 
 // Comm / system
-static bool     g_tcaPresent       = false;
 static uint8_t  g_commFailCount    = 0;
 static uint32_t g_nextHeartbeatMs  = 0;
 
@@ -204,10 +199,9 @@ static void statusLedsBegin() {
 }
 
 static void statusLedsUpdate() {
-  // Pixel 3: I2C / TCA status
-  if (!g_tcaPresent)               setPixStatus(3, ST_ERROR);
-  else if (g_commFailCount) setPixStatus(3, ST_WARN);
-  else                      setPixStatus(3, ST_OK);
+  // Pixel 3: I2C status (comm failures)
+  if (g_commFailCount) setPixStatus(3, ST_WARN);
+  else                 setPixStatus(3, ST_OK);
   // Pixel 4: TF‑Luna sensors
   if (!(g_tfInit1Ok && g_tfInit2Ok && g_tfInit3Ok)) {
     setPixStatus(4, ST_PENDING);          // not all initialised / starting
@@ -232,7 +226,7 @@ static void statusLedsUpdate() {
   }
   // Pixel 0: System heartbeat (blink)
   {
-    bool anyError = (!g_tcaPresent || g_commFailCount || g_tfReadError);
+    bool anyError = (g_commFailCount || g_tfReadError);
     uint16_t interval = anyError ? 150 : 500;  // fast blink on fault, slow on OK
     if ((int32_t)(millis() - g_hbNextToggleMs) >= 0) {
       g_hbOn = !g_hbOn;
@@ -271,15 +265,6 @@ static void laserLoop() {
   }
 }
 
-/* ------------------------------ I2C/TCA ------------------------------ */
-
-static bool tcaSelect(uint8_t ch) {
-  if (ch > 7) return false;
-  Wire.beginTransmission(TCA_ADDR);
-  Wire.write(1<<ch);
-  return Wire.endTransmission() == 0;
-}
-
 /* ----------------------------- TF‑Luna ------------------------------- */
 
 static bool waitRTSHigh(uint8_t pin, uint16_t timeout_ms) {
@@ -303,16 +288,10 @@ static void tflStartContinuous(uint8_t addr) {
   tfl.getData(dump, addr);   // throw away one sample
 }
 
-static bool tflInitOnCh(uint8_t ch, uint8_t addr, const char* name, bool &flagOk) {
-  if (!tcaSelect(ch)) {
-    logf("[TF] %s: TCA select failed", name);
-    flagOk = false;
-    return false;
-  }
-  delay(5);
+static bool tflInit(uint8_t addr, const char* name, bool &flagOk) {
   tflStartContinuous(addr);
   delay(5);
-  logf("[TF] %s: init OK on ch %u addr 0x%02X", name, ch, addr);
+  logf("[TF] %s: init OK addr 0x%02X", name, addr);
   flagOk = true;
   return true;
 }
@@ -328,9 +307,7 @@ static int16_t tflReadOnceDRDY(uint8_t addr, uint8_t rtsPin) {
   return -1;
 }
 
-static int16_t tflAverageOnCh(uint8_t ch, uint8_t rtsPin, uint8_t addr) {
-  if (!tcaSelect(ch)) return -1;
-  delay(3);
+static int16_t tflAverage(uint8_t rtsPin, uint8_t addr) {
   long   sum  = 0;
   uint8_t good = 0;
   for (uint8_t i=0;i<SAMPLES_PER_SENSOR;i++) {
@@ -368,11 +345,11 @@ static void notifyMeasurement(float h_raw,float w_raw,float l_raw) {
 
 static void startCapture() {
   logLine("[CAPTURE] TRIGGERED (begin TF‑Luna reads)");
-  int16_t length_cm_i = tflAverageOnCh(TCA_CH_TF1, PIN_RTS_1, TFLUNA_ADDR);
+  int16_t length_cm_i = tflAverage(PIN_RTS_1, TFLUNA_ADDR_LENGTH);
   if (length_cm_i < 0) g_commFailCount++;
-  int16_t height_cm_i = tflAverageOnCh(TCA_CH_TF2, PIN_RTS_2, TFLUNA_ADDR);
+  int16_t height_cm_i = tflAverage(PIN_RTS_2, TFLUNA_ADDR_HEIGHT);
   if (height_cm_i < 0) g_commFailCount++;
-  int16_t width_cm_i  = tflAverageOnCh(TCA_CH_TF3, PIN_RTS_3, TFLUNA_ADDR);
+  int16_t width_cm_i  = tflAverage(PIN_RTS_3, TFLUNA_ADDR_WIDTH);
   if (width_cm_i  < 0) g_commFailCount++;
   bool okCapture = (length_cm_i >= 0 && height_cm_i >= 0 && width_cm_i >= 0);
   const float length_cm = (length_cm_i >= 0) ? (float)length_cm_i : NAN;
@@ -404,9 +381,9 @@ static bool changedFrac(float oldV, float newV) {
 }
 
 static void monitorBoxPlacement() {
-  int16_t length_cm_i = tflAverageOnCh(TCA_CH_TF1, PIN_RTS_1, TFLUNA_ADDR);
-  int16_t height_cm_i = tflAverageOnCh(TCA_CH_TF2, PIN_RTS_2, TFLUNA_ADDR);
-  int16_t width_cm_i  = tflAverageOnCh(TCA_CH_TF3, PIN_RTS_3, TFLUNA_ADDR);
+  int16_t length_cm_i = tflAverage(PIN_RTS_1, TFLUNA_ADDR_LENGTH);
+  int16_t height_cm_i = tflAverage(PIN_RTS_2, TFLUNA_ADDR_HEIGHT);
+  int16_t width_cm_i  = tflAverage(PIN_RTS_3, TFLUNA_ADDR_WIDTH);
   if (length_cm_i < 0 || height_cm_i < 0 || width_cm_i < 0) {
     static uint8_t errCount = 0;
     if (++errCount >= 10) {
@@ -472,17 +449,9 @@ void setup() {
   Wire.begin();
   Wire.setClock(I2C_CLOCK_HZ);
   logf("[I2C] Started at %lu Hz", (unsigned long)I2C_CLOCK_HZ);
-  Wire.beginTransmission(TCA_ADDR);
-  if (Wire.endTransmission() != 0) {
-    logLine("[TCA] ERROR: TCA9548A not found at 0x70");
-    g_tcaPresent = false;
-  } else {
-    logLine("[TCA] Found TCA9548A at 0x70");
-    g_tcaPresent = true;
-  }
-  tflInitOnCh(TCA_CH_TF1, TFLUNA_ADDR, "TF1(Length)", g_tfInit1Ok);
-  tflInitOnCh(TCA_CH_TF2, TFLUNA_ADDR, "TF2(Height)", g_tfInit2Ok);
-  tflInitOnCh(TCA_CH_TF3, TFLUNA_ADDR, "TF3(Width)",  g_tfInit3Ok);
+  tflInit(TFLUNA_ADDR_LENGTH, "TF1(Length)", g_tfInit1Ok);
+  tflInit(TFLUNA_ADDR_HEIGHT, "TF2(Height)", g_tfInit2Ok);
+  tflInit(TFLUNA_ADDR_WIDTH, "TF3(Width)",  g_tfInit3Ok);
   Bridge.begin();
   delay(2000);
   bool start = false;
