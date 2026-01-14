@@ -4,7 +4,7 @@ MeasurePi is a self-contained application for the **Arduino UNO Q** that measure
 
 1. **Microcontroller sketch (`measure_uno_q.ino`)**
    * Runs on the STM32U585 microcontroller.
-   * Handles timing, laser control, sensor multiplexing, and the state machine.
+   * Handles timing, laser control, sensor sampling, and the state machine.
    * Communicates with the Linux side of the UNO Q via the Router Bridge RPC interface.
    * The same sketch is mirrored in `uno_q_app/sketch/sketch.ino` so it is built as part of the UNO Q app.
 
@@ -18,7 +18,7 @@ MeasurePi is a self-contained application for the **Arduino UNO Q** that measure
 
 * Arduino UNO Q running the default Debian image.
 * A measurement rig wired with:
-  * Three TF-Luna I²C sensors connected via a TCA9548A multiplexer.
+  * Three TF-Luna I²C sensors with unique addresses (0x10 height, 0x20 width, 0x30 length).
   * An eight-pixel NeoPixel strip on pin 7.
   * A laser driver on pin 10.
 * Access to an MQTT broker (local or remote).
