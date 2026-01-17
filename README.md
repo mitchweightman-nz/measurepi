@@ -27,7 +27,7 @@ MeasurePi is a self-contained application for the **Arduino UNO Q** that measure
 
 ## Deployment on UNO Q
 
-The repository includes a helper script, `deploy_uno_q.sh`, that automates installation and deployment.
+The repository includes a helper script, `deploy_uno_q.sh`, that automates installation and deployment. If the `uno_q_app` directory is missing, the script will generate the app bundle from the repository sources (sketch, bridge, dashboard, and templates).
 
 1. **Clone this repository** onto the UNO Q.
    ```bash
@@ -88,7 +88,7 @@ arduino-app-cli app start measurepi
 
 ## UNO Q App Structure
 
-Arduino App Lab expects a specific directory layout. This repository provides a ready-made `uno_q_app` directory:
+Arduino App Lab expects a specific directory layout. This repository provides a ready-made `uno_q_app` directory, and the deployment script can generate one if it is missing:
 
 ```
 uno_q_app/
