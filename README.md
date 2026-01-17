@@ -113,7 +113,9 @@ Older Raspberry Pi and UNO R4 WiFi assets have been moved into the `legacy/` dir
 
 ## Developing and Testing Locally
 
-You can run the Python dashboard and MQTT bridge on a regular computer for testing:
+You can run the Python dashboard and MQTT bridge on a regular computer for testing. The
+bridge and dashboard now run as separate processes, so start each script in its own
+terminal session:
 
 ```bash
 python3 bridge_mqtt.py
