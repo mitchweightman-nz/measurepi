@@ -289,19 +289,19 @@ static void tflStartContinuous(uint8_t addr) {
 }
 
 static bool tflInit(uint8_t addr, const char* name, bool &flagOk) {
-
   Wire.beginTransmission(addr);
-  if (Wire.endTransmission() != 0) {
-    logf("[TF] %s: sensor not found at addr 0x%02X", name, addr);
-    flagOk = false;
-Wire.beginTransmission(addr);
   if (Wire.endTransmission() != 0) {
     logf("[TF] %s: sensor not found at addr 0x%02X", name, addr);
     flagOk = false;
     return false;
   }
-
-
+  delay(5);
+  tflStartContinuous(addr);
+  delay(5);
+  logf("[TF] %s: init OK addr 0x%02X", name, addr);
+  flagOk = true;
+  return true;
+}
 
 static int16_t tflReadOnceDRDY(uint8_t addr, uint8_t rtsPin) {
   if (!waitRTSHigh(rtsPin, DRDY_TIMEOUT_MS)) {
