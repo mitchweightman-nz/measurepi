@@ -9,6 +9,19 @@ This guide applies to the entire `measurepi` repository unless a more specific `
 - Prefer clear, self-documenting code; add brief comments when logic is non-obvious.
 - Do **not** wrap import statements in `try/except` blocks.
 
+## Repository Overview
+
+- `measure_uno_q.ino` runs on the UNO Q MCU and drives the sensors/laser/state machine.
+- `bridge_mqtt.py` runs on the UNO Q Linux side, exposes RPC handlers (`linux_started`, `mcu_ready`, `measurement_data`), and publishes MQTT payloads.
+- `measurepi_dashboard.py` + `templates/index.html` provide the Flask dashboard and JSON APIs.
+- The `legacy/` directory contains older Raspberry Pi / UNO R4 WiFi assets.
+
+## Runtime Requirements
+
+- Python 3 with `paho-mqtt` and `Flask`.
+- The UNO Q `arduino.app_utils` library for Router Bridge RPC on the Linux side.
+- Keep README configuration tables aligned with the environment variables used in `bridge_mqtt.py` and `measurepi_dashboard.py`.
+
 ## Python and JavaScript Style
 
 - Favor consistent formatting (Black-compatible Python, Prettier-friendly JavaScript).

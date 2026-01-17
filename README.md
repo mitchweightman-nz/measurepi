@@ -1,18 +1,22 @@
 # MeasurePi UNO Q Measurement Rig
 
-MeasurePi is a self-contained application for the **Arduino UNO Q** that measures parcel dimensions using three TF-Luna time-of-flight sensors. It includes a lightweight web dashboard and publishes measurements over MQTT. The project is split into two components:
+MeasurePi is a self-contained application for the **Arduino UNO Q** that measures parcel dimensions using three TF-Luna time-of-flight sensors. It includes a lightweight web dashboard and publishes measurements over MQTT. The project is split into three components:
 
 1. **Microcontroller sketch (`measure_uno_q.ino`)**
    * Runs on the STM32U585 microcontroller.
    * Handles timing, laser control, sensor sampling, and the state machine.
    * Communicates with the Linux side of the UNO Q via the Router Bridge RPC interface.
-   * The same sketch is mirrored in `uno_q_app/sketch/sketch.ino` so it is built as part of the UNO Q app.
 
-2. **Python application**
+2. **MQTT bridge (`bridge_mqtt.py`)**
    * Runs on the embedded Debian system (MPU).
    * Publishes measurements to an MQTT broker using `paho-mqtt`.
-   * Serves a Flask dashboard for live readings.
-   * Entry point: `uno_q_app/python/main.py` (a copy of `bridge_mqtt.py`).
+   * Exposes RPC handlers (`linux_started`, `mcu_ready`, `measurement_data`) for the MCU.
+   * Listens for capture commands on MQTT and forwards them to the MCU.
+
+3. **Dashboard (`measurepi_dashboard.py` + `templates/index.html`)**
+   * Runs a Flask dashboard for live readings.
+   * Subscribes to measurement/log topics from the bridge.
+   * Provides a small JSON API for dashboards and integrations.
 
 ## Prerequisites
 
@@ -23,11 +27,9 @@ MeasurePi is a self-contained application for the **Arduino UNO Q** that measure
   * A laser driver on pin 10.
 * Access to an MQTT broker (local or remote).
 * Network access on the UNO Q to install packages via `apt`.
-* **Arduino App CLI** (`arduino-app-cli`).
+* Python 3 with `paho-mqtt`, `Flask`, and the UNO Q `arduino.app_utils` bridge library.
 
-## Deployment on UNO Q
-
-The repository includes a helper script, `deploy_uno_q.sh`, that automates installation and deployment.
+## Running on UNO Q
 
 1. **Clone this repository** onto the UNO Q.
    ```bash
@@ -37,72 +39,62 @@ The repository includes a helper script, `deploy_uno_q.sh`, that automates insta
    cd measurepi
    ```
 
-2. **Run the deployment script**.
+2. **Install Python dependencies** (if they are not already baked into your image).
    ```bash
-   chmod +x deploy_uno_q.sh
-   ./deploy_uno_q.sh
+   python3 -m pip install paho-mqtt Flask
    ```
 
-The script will:
-
-1. Update the package index and install Python and Git if missing.
-2. Verify `arduino-app-cli` is available.
-3. Copy `uno_q_app` into `~/ArduinoApps/measurepi`.
-4. Install Python dependencies from `uno_q_app/python/requirements.txt`.
-5. Build and start the app:
+3. **Start the bridge and dashboard**.
    ```bash
-   arduino-app-cli app build measurepi
-   arduino-app-cli app start measurepi
+   python3 bridge_mqtt.py
+   python3 measurepi_dashboard.py
    ```
-
-You can monitor logs with:
-```bash
-arduino-app-cli app logs measurepi
-```
 
 ## Configuration
 
-The application reads environment variables so you can adjust settings without editing code. Set them in the systemd unit or inline before starting the app.
+The application reads environment variables so you can adjust settings without editing code. Set them in the systemd unit or inline before starting the scripts.
+
+### Bridge (`bridge_mqtt.py`) variables
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `MQTT_HOST` | `localhost` | MQTT broker hostname. |
+| `MQTT_BROKER` | `10.1.1.85` | MQTT broker hostname or IP. |
 | `MQTT_PORT` | `1883` | MQTT broker port. |
 | `MQTT_USER` | (unset) | MQTT username. |
 | `MQTT_PASS` | (unset) | MQTT password. |
-| `MQTT_TOPIC` | `measurepi` | Topic prefix for published measurements. |
+| `MQTT_CMD_TOPIC` | `measure/cmd` | MQTT topic for capture commands. |
+| `MQTT_DATA_TOPIC` | `measure/data` | MQTT topic for measurement payloads. |
+| `MQTT_LOG_TOPIC` | `measure/log` | MQTT topic for bridge logs. |
+| `MQTT_CLIENT_ID` | `uno-q-bridge` | MQTT client identifier. |
 | `REF_LENGTH_CM` | `80.0` | Reference distance for the length sensor. |
 | `REF_HEIGHT_CM` | `89.0` | Reference distance for the height sensor. |
 | `REF_WIDTH_CM` | `70.0` | Reference distance for the width sensor. |
-| `DASHBOARD_PORT` | `5000` | Flask dashboard port. |
-| `ALLOWED_ORIGINS` | `*` | Comma-separated list of allowed dashboard origins. |
+
+### Dashboard (`measurepi_dashboard.py`) variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MQTT_BROKER` | `localhost` | MQTT broker hostname or IP. |
+| `MQTT_PORT` | `1883` | MQTT broker port. |
+| `MQTT_DATA_TOPIC` | `measure/data` | MQTT topic for measurement payloads. |
+| `MQTT_LOG_TOPIC` | `measure/log` | MQTT topic for log payloads. |
+| `MQTT_CMD_TOPIC` | `measure/cmd` | MQTT topic for command payloads. |
+| `FLASK_PORT` / `PORT` | `7000` | Dashboard HTTP port. |
+| `CORS_ALLOWED_ORIGINS` | (unset) | Comma-separated list of allowed origins (adds to the default `https://nzc.gosweetspot.com`). |
 
 Example:
 ```bash
-export MQTT_HOST=192.168.1.10
+export MQTT_BROKER=192.168.1.10
 export MQTT_USER=myuser
 export MQTT_PASS=secret
-arduino-app-cli app stop measurepi
-arduino-app-cli app start measurepi
+python3 bridge_mqtt.py
 ```
 
-## UNO Q App Structure
+## Bridge & Dashboard Behavior
 
-Arduino App Lab expects a specific directory layout. This repository provides a ready-made `uno_q_app` directory:
-
-```
-uno_q_app/
-├── app.yaml              # App metadata and default environment variables
-├── python/
-│   ├── main.py           # Entry point (MQTT bridge)
-│   ├── measurepi_dashboard.py
-│   └── requirements.txt
-└── sketch/
-    ├── sketch.ino        # MCU sketch (copied from measure_uno_q.ino)
-    └── sketch.yaml       # FQBN and library dependencies
-```
-
-The `sketch.yaml` targets `arduino:zephyr:unoq` and includes the required libraries (TFLI2C, Adafruit NeoPixel, Arduino RouterBridge).
+* The bridge registers RPC handlers for the MCU: `linux_started`, `mcu_ready`, and `measurement_data`.
+* When the bridge receives a command payload that starts with `CAP` (case-insensitive), it calls the MCU `capture` function.
+* The dashboard subscribes to `MQTT_DATA_TOPIC` and `MQTT_LOG_TOPIC` and exposes JSON APIs for integrations.
 
 ## Legacy Hardware Files
 
@@ -121,6 +113,20 @@ python3 measurepi_dashboard.py
 ```
 
 Set the environment variables above to match your test environment. When running off-board, you may need to stub the Router Bridge calls.
+
+## Dashboard API
+
+| Route | Method | Description |
+| --- | --- | --- |
+| `/` | GET | Dashboard HTML. |
+| `/json` | GET | Current rounded measurement plus history. |
+| `/api/raw` | GET | Raw MQTT payloads and log messages. |
+| `/api/settings` | GET/POST | Read or update rounding rules for `height`, `width`, `length`. |
+| `/api/lcd_text` | GET | 4-line LCD-style string. |
+| `/api/measurements_current` | GET | Current measurement payload. |
+| `/api/command` | POST | Publish a raw command to `MQTT_CMD_TOPIC`. |
+| `/api/capture` | POST | Publish a capture command and report scale state. |
+| `/api/manual_weight` | POST | Provide a manual weight in kilograms. |
 
 ## Contributing
 
