@@ -22,13 +22,6 @@ reference distances used for calculating the box size:
 • MQTT_CLIENT_ID – MQTT client identifier (default uno-q-bridge)
 • REF_LENGTH_CM, REF_HEIGHT_CM, REF_WIDTH_CM – reference distances, in centimetres
 
-Patch notes (this version):
-- Starts measurepi_dashboard.run_application() in a background daemon thread
-  BEFORE App.run(...), so one process can host both services.
-- Unifies MQTT defaults by exporting the bridge’s resolved env values to the
-  process environment BEFORE importing the dashboard module, so the dashboard
-  doesn’t quietly fall back to localhost while the bridge uses 10.1.1.85.
-
 Version: Ver-2601172142
 """
 
@@ -247,74 +240,9 @@ def _user_loop() -> None:
     time.sleep(0.1)
 
 
-# ─── Dashboard integration (patched) ─────────────────────────
-
-_dashboard_thread: Optional[threading.Thread] = None
-
-
-def _sync_mqtt_env_defaults_for_dashboard() -> None:
-    """
-    Ensure the dashboard sees the same MQTT settings as the bridge.
-
-    The dashboard reads MQTT_* env vars at import time (module-level constants).
-    So we set defaults here BEFORE importing measurepi_dashboard.
-    We only set values that are missing, so explicit env vars always win.
-    """
-    os.environ.setdefault("MQTT_BROKER", str(MQTT_BROKER))
-    os.environ.setdefault("MQTT_PORT", str(MQTT_PORT))
-    os.environ.setdefault("MQTT_CMD_TOPIC", str(MQTT_CMD_TOPIC))
-    os.environ.setdefault("MQTT_DATA_TOPIC", str(MQTT_DATA_TOPIC))
-    os.environ.setdefault("MQTT_LOG_TOPIC", str(MQTT_LOG_TOPIC))
-
-    # If broker auth is set for bridge, propagate it too (dashboard will ignore if unused).
-    if MQTT_USER:
-        os.environ.setdefault("MQTT_USER", str(MQTT_USER))
-    if MQTT_PASS is not None:
-        os.environ.setdefault("MQTT_PASS", str(MQTT_PASS))
-
-
-def _start_dashboard_thread() -> None:
-    """
-    Start the Flask dashboard in a background daemon thread.
-
-    Can be disabled by setting START_DASHBOARD=0/false/no.
-    """
-    global _dashboard_thread
-
-    raw = (os.getenv("START_DASHBOARD", "1") or "").strip().lower()
-    if raw in {"0", "false", "no", "off"}:
-        _log("[DASH] START_DASHBOARD disabled; not starting dashboard thread.")
-        return
-
-    if _dashboard_thread and _dashboard_thread.is_alive():
-        _log("[DASH] Dashboard thread already running.")
-        return
-
-    _sync_mqtt_env_defaults_for_dashboard()
-
-    def _runner():
-        try:
-            _log("[DASH] Starting measurepi_dashboard.run_application()…")
-            # Import AFTER env sync so dashboard doesn’t default to localhost.
-            import measurepi_dashboard  # noqa: F401
-            measurepi_dashboard.run_application()
-        except Exception as e:
-            _log(f"[DASH] Dashboard thread crashed: {e}")
-
-    _dashboard_thread = threading.Thread(
-        target=_runner,
-        name="measurepi_dashboard",
-        daemon=True,
-    )
-    _dashboard_thread.start()
-
-
 def main() -> None:
     _log("[SYSTEM] UNO Q MQTT bridge starting…")
     _start_mqtt()
-
-    # Patched: start dashboard BEFORE App.run(...) blocks forever.
-    _start_dashboard_thread()
 
     App.run(user_loop=_user_loop)
 

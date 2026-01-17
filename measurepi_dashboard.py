@@ -45,6 +45,8 @@ except ValueError:
 MQTT_TOPIC_SUB = os.getenv("MQTT_DATA_TOPIC", "measure/data")
 MQTT_TOPIC_LOG = os.getenv("MQTT_LOG_TOPIC", "measure/log")
 MQTT_COMMAND_TOPIC = os.getenv("MQTT_CMD_TOPIC", "measure/cmd")
+MQTT_USER = os.getenv("MQTT_USER")
+MQTT_PASS = os.getenv("MQTT_PASS")
 
 # Number of raw MQTT payloads and log messages to keep in memory
 MAX_RAW_HISTORY = 200
@@ -69,6 +71,11 @@ awaiting_manual_weight = False
 pending_manual_weight_value = None
 
 mqtt_client = mqtt.Client(client_id=f"measurepi_dashboard_{os.getpid()}", protocol=mqtt.MQTTv311)
+if MQTT_USER:
+    if MQTT_PASS is not None:
+        mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
+    else:
+        mqtt_client.username_pw_set(MQTT_USER)
 
 # ─── Helper Functions ─────────────────────
 
