@@ -33,7 +33,7 @@ The repository includes a helper script, `deploy_uno_q.sh`, that automates insta
    ```bash
    sudo apt update
    sudo apt install -y git
-   git clone https://github.com/your-org/measurepi.git](https://github.com/mitchweightman-nz/measurepi
+   git clone https://github.com/mitchweightman-nz/measurepi
    cd measurepi
    ```
 
