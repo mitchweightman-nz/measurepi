@@ -12,7 +12,7 @@ MeasurePi is a self-contained application for the **Arduino UNO Q** that measure
    * Runs on the embedded Debian system (MPU).
    * Publishes measurements to an MQTT broker using `paho-mqtt`.
    * Serves a Flask dashboard for live readings.
-   * Entry point: `uno_q_app/python/main.py` (a copy of `bridge_mqtt.py`).
+   * Entry points: `bridge_mqtt.py` (UNO Q bridge) and `mqtt_server.py` (MQTT process).
 
 ## Prerequisites
 
@@ -66,20 +66,27 @@ The application reads environment variables so you can adjust settings without e
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `MQTT_HOST` | `localhost` | MQTT broker hostname. |
-| `MQTT_PORT` | `1883` | MQTT broker port. |
-| `MQTT_USER` | (unset) | MQTT username. |
-| `MQTT_PASS` | (unset) | MQTT password. |
-| `MQTT_TOPIC` | `measurepi` | Topic prefix for published measurements. |
-| `REF_LENGTH_CM` | `80.0` | Reference distance for the length sensor. |
-| `REF_HEIGHT_CM` | `89.0` | Reference distance for the height sensor. |
-| `REF_WIDTH_CM` | `70.0` | Reference distance for the width sensor. |
+| `MQTT_BROKER` | `10.1.1.85` | MQTT broker hostname or IP (mqtt_server.py). |
+| `MQTT_PORT` | `1883` | MQTT broker port (mqtt_server.py). |
+| `MQTT_USER` | (unset) | MQTT username (mqtt_server.py). |
+| `MQTT_PASS` | (unset) | MQTT password (mqtt_server.py). |
+| `MQTT_CMD_TOPIC` | `measure/cmd` | Topic for capture commands (mqtt_server.py). |
+| `MQTT_DATA_TOPIC` | `measure/data` | Topic for published measurement payloads (mqtt_server.py). |
+| `MQTT_LOG_TOPIC` | `measure/log` | Topic for log messages (mqtt_server.py). |
+| `MQTT_CLIENT_ID` | `uno-q-bridge` | MQTT client identifier (mqtt_server.py). |
+| `MQTT_IPC_HOST` | `127.0.0.1` | Host for bridge → MQTT IPC (both processes). |
+| `MQTT_IPC_PORT` | `8765` | Port for bridge → MQTT IPC (both processes). |
+| `BRIDGE_CMD_HOST` | `127.0.0.1` | Host for MQTT → bridge command IPC (both processes). |
+| `BRIDGE_CMD_PORT` | `8766` | Port for MQTT → bridge command IPC (both processes). |
+| `REF_LENGTH_CM` | `80.0` | Reference distance for the length sensor (bridge_mqtt.py). |
+| `REF_HEIGHT_CM` | `89.0` | Reference distance for the height sensor (bridge_mqtt.py). |
+| `REF_WIDTH_CM` | `70.0` | Reference distance for the width sensor (bridge_mqtt.py). |
 | `DASHBOARD_PORT` | `5000` | Flask dashboard port. |
 | `ALLOWED_ORIGINS` | `*` | Comma-separated list of allowed dashboard origins. |
 
 Example:
 ```bash
-export MQTT_HOST=192.168.1.10
+export MQTT_BROKER=192.168.1.10
 export MQTT_USER=myuser
 export MQTT_PASS=secret
 arduino-app-cli app stop measurepi
@@ -114,11 +121,12 @@ Older Raspberry Pi and UNO R4 WiFi assets have been moved into the `legacy/` dir
 ## Developing and Testing Locally
 
 You can run the Python dashboard and MQTT bridge on a regular computer for testing. The
-bridge and dashboard now run as separate processes, so start each script in its own
-terminal session:
+bridge, MQTT server, and dashboard now run as separate processes, so start each script
+in its own terminal session:
 
 ```bash
 python3 bridge_mqtt.py
+python3 mqtt_server.py
 python3 measurepi_dashboard.py
 ```
 
