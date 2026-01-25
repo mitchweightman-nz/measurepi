@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
+[ -n "$BASH_VERSION" ] || { echo "This script requires bash"; exit 1; }
 set -euo pipefail
+
 
 APP_ID="measurepi"
 REPO_URL="https://github.com/mitchweightman-nz/measurepi"
@@ -35,3 +37,4 @@ log "Deploying updated app bundle"
 
 log "Tailing logs (Ctrl+C to exit)"
 arduino-app-cli app logs "${APP_ID}"
+
