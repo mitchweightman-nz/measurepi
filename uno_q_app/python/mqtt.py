@@ -15,6 +15,7 @@ import socket
 import socketserver
 import threading
 import time
+from typing import Optional
 
 import paho.mqtt.client as mqtt
 
@@ -174,17 +175,21 @@ def _start_mqtt() -> None:
 
 # ─── Main ──────────────────────────────────────────────────
 
-def main() -> None:
+def main(stop_event: Optional[threading.Event] = None) -> None:
     _log("[SYSTEM] UNO Q MQTT server starting…")
+    if stop_event is None:
+        stop_event = threading.Event()
     _start_mqtt()
     ipc_server = _start_ipc_server()
 
     try:
-        while True:
+        while not stop_event.is_set():
             time.sleep(1)
     except KeyboardInterrupt:
         _log("[SYSTEM] Shutdown requested by user (Ctrl-C).")
+        stop_event.set()
     finally:
+        stop_event.set()
         ipc_server.shutdown()
         ipc_server.server_close()
         try:

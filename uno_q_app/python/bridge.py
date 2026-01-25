@@ -199,13 +199,15 @@ def _user_loop() -> None:
     time.sleep(0.1)
 
 
-def main() -> None:
+def main(stop_event: Optional[threading.Event] = None) -> None:
     _log("[SYSTEM] UNO Q MQTT bridge starting…")
     command_server = _start_command_server()
 
     try:
         App.run(user_loop=_user_loop)
     finally:
+        if stop_event is not None:
+            stop_event.set()
         command_server.shutdown()
         command_server.server_close()
 
