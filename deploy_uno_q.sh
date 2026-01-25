@@ -1,45 +1,70 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="measurepi"
+APP_ID="measurepi"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_DIR="${REPO_ROOT}/uno_q_app"
-TARGET_DIR="${HOME}/ArduinoApps/${APP_NAME}"
+SRC_APP_DIR="${REPO_ROOT}/uno_q_app"
+DST_APP_DIR="${HOME}/ArduinoApps/${APP_ID}"
 
-log() {
-  printf '\n[%s] %s\n' "${APP_NAME}" "$1"
-}
+PY_DIR_REL="python"
+VENV_DIR_REL="${PY_DIR_REL}/.venv"
+REQ_FILE_REL="${PY_DIR_REL}/requirements.txt"
 
-if ! command -v arduino-app-cli >/dev/null 2>&1; then
-  echo "Error: arduino-app-cli is not installed or not on PATH." >&2
-  echo "Install Arduino App CLI before running this script." >&2
-  exit 1
-fi
+log() { printf "\n[%s] %s\n" "${APP_ID}" "$*"; }
+die() { echo "ERROR: $*" >&2; exit 1; }
 
-if [[ ! -d "${SOURCE_DIR}" ]]; then
-  echo "Error: expected ${SOURCE_DIR} to exist." >&2
-  echo "Ensure the repository includes the uno_q_app directory." >&2
-  exit 1
-fi
+need_cmd() { command -v "$1" >/dev/null 2>&1 || die "Missing command: $1"; }
 
-log "Updating package index and installing dependencies"
-sudo apt update
-sudo apt install -y git python3 python3-pip
+log "Preflight"
+need_cmd arduino-app-cli
+need_cmd python3
+need_cmd rsync
 
-log "Deploying UNO Q app to ${TARGET_DIR}"
+[[ -d "${SRC_APP_DIR}" ]] || die "Expected '${SRC_APP_DIR}' to exist (UNO Q app bundle not found)."
+
+# Ensure target base dir exists
 mkdir -p "${HOME}/ArduinoApps"
-rm -rf "${TARGET_DIR}"
-cp -a "${SOURCE_DIR}" "${TARGET_DIR}"
 
-if [[ -f "${TARGET_DIR}/python/requirements.txt" ]]; then
-  log "Installing Python dependencies"
-  python3 -m pip install --user -r "${TARGET_DIR}/python/requirements.txt"
+# Stop app if running (best effort)
+log "Stopping app (best effort)"
+arduino-app-cli app stop "${APP_ID}" >/dev/null 2>&1 || true
+
+# Sync app bundle into ArduinoApps (idempotent)
+log "Syncing app bundle to ${DST_APP_DIR}"
+mkdir -p "${DST_APP_DIR}"
+
+# Preserve .venv between deploys unless requirements changed: we keep it, rsync will not delete if excluded.
+rsync -a --delete \
+  --exclude "/${VENV_DIR_REL}/" \
+  "${SRC_APP_DIR}/" "${DST_APP_DIR}/"
+
+# Python dependencies in per-app venv
+REQ_FILE="${DST_APP_DIR}/${REQ_FILE_REL}"
+VENV_DIR="${DST_APP_DIR}/${VENV_DIR_REL}"
+
+if [[ -f "${REQ_FILE}" ]]; then
+  log "Ensuring Python venv at ${VENV_DIR}"
+  if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+    python3 -m venv "${VENV_DIR}"
+  fi
+
+  # Upgrade pip/setuptools/wheel inside venv
+  "${VENV_DIR}/bin/python" -m pip install -U pip setuptools wheel >/dev/null
+
+  log "Installing Python deps from ${REQ_FILE}"
+  "${VENV_DIR}/bin/python" -m pip install -r "${REQ_FILE}"
 else
-  log "Skipping Python dependencies (requirements.txt not found)"
+  log "No ${REQ_FILE_REL} found; skipping Python deps install"
 fi
 
-log "Building and starting ${APP_NAME}"
-arduino-app-cli app build "${APP_NAME}"
-arduino-app-cli app start "${APP_NAME}"
+# Build & start app
+log "Building app: ${APP_ID}"
+arduino-app-cli app build "${APP_ID}"
 
-log "Deployment complete"
+log "Starting app: ${APP_ID}"
+arduino-app-cli app start "${APP_ID}"
+
+log "Done."
+echo "Next:"
+echo "  arduino-app-cli app status ${APP_ID}"
+echo "  arduino-app-cli app logs   ${APP_ID}"
