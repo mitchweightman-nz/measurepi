@@ -2,17 +2,17 @@
 
 MeasurePi is a self-contained application for the **Arduino UNO Q** that measures parcel dimensions using three TF-Luna time-of-flight sensors. It includes a lightweight web dashboard and publishes measurements over MQTT. The project is split into two components:
 
-1. **Microcontroller sketch (`measure_uno_q.ino`)**
+1. **Microcontroller sketch (`uno_q_app/sketch/sketch.ino`)**
    * Runs on the STM32U585 microcontroller.
    * Handles timing, laser control, sensor sampling, and the state machine.
    * Communicates with the Linux side of the UNO Q via the Router Bridge RPC interface.
-   * The same sketch is mirrored in `uno_q_app/sketch/sketch.ino` so it is built as part of the UNO Q app.
+   * The sketch lives in `uno_q_app/sketch/sketch.ino` so it is built as part of the UNO Q app.
 
 2. **Python application**
    * Runs on the embedded Debian system (MPU).
    * Publishes measurements to an MQTT broker using `paho-mqtt`.
    * Serves a Flask dashboard for live readings.
-   * Entry points: `bridge_mqtt.py` (UNO Q bridge) and `mqtt_server.py` (MQTT process).
+   * Entry points: `python/main.py` (app supervisor), `python/bridge.py` (UNO Q bridge), and `python/mqtt.py` (MQTT process).
 
 ## Prerequisites
 
@@ -66,21 +66,21 @@ The application reads environment variables so you can adjust settings without e
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `MQTT_BROKER` | `10.1.1.85` | MQTT broker hostname or IP (mqtt_server.py). |
-| `MQTT_PORT` | `1883` | MQTT broker port (mqtt_server.py). |
-| `MQTT_USER` | (unset) | MQTT username (mqtt_server.py). |
-| `MQTT_PASS` | (unset) | MQTT password (mqtt_server.py). |
-| `MQTT_CMD_TOPIC` | `measure/cmd` | Topic for capture commands (mqtt_server.py). |
-| `MQTT_DATA_TOPIC` | `measure/data` | Topic for published measurement payloads (mqtt_server.py). |
-| `MQTT_LOG_TOPIC` | `measure/log` | Topic for log messages (mqtt_server.py). |
-| `MQTT_CLIENT_ID` | `uno-q-bridge` | MQTT client identifier (mqtt_server.py). |
+| `MQTT_BROKER` | `10.1.1.85` | MQTT broker hostname or IP (mqtt.py). |
+| `MQTT_PORT` | `1883` | MQTT broker port (mqtt.py). |
+| `MQTT_USER` | (unset) | MQTT username (mqtt.py). |
+| `MQTT_PASS` | (unset) | MQTT password (mqtt.py). |
+| `MQTT_CMD_TOPIC` | `measure/cmd` | Topic for capture commands (mqtt.py). |
+| `MQTT_DATA_TOPIC` | `measure/data` | Topic for published measurement payloads (mqtt.py). |
+| `MQTT_LOG_TOPIC` | `measure/log` | Topic for log messages (mqtt.py). |
+| `MQTT_CLIENT_ID` | `uno-q-bridge` | MQTT client identifier (mqtt.py). |
 | `MQTT_IPC_HOST` | `127.0.0.1` | Host for bridge → MQTT IPC (both processes). |
 | `MQTT_IPC_PORT` | `8765` | Port for bridge → MQTT IPC (both processes). |
 | `BRIDGE_CMD_HOST` | `127.0.0.1` | Host for MQTT → bridge command IPC (both processes). |
 | `BRIDGE_CMD_PORT` | `8766` | Port for MQTT → bridge command IPC (both processes). |
-| `REF_LENGTH_CM` | `80.0` | Reference distance for the length sensor (bridge_mqtt.py). |
-| `REF_HEIGHT_CM` | `89.0` | Reference distance for the height sensor (bridge_mqtt.py). |
-| `REF_WIDTH_CM` | `70.0` | Reference distance for the width sensor (bridge_mqtt.py). |
+| `REF_LENGTH_CM` | `80.0` | Reference distance for the length sensor (bridge.py). |
+| `REF_HEIGHT_CM` | `89.0` | Reference distance for the height sensor (bridge.py). |
+| `REF_WIDTH_CM` | `70.0` | Reference distance for the width sensor (bridge.py). |
 | `DASHBOARD_PORT` | `5000` | Flask dashboard port. |
 | `ALLOWED_ORIGINS` | `*` | Comma-separated list of allowed dashboard origins. |
 
@@ -101,11 +101,15 @@ Arduino App Lab expects a specific directory layout. This repository provides a 
 uno_q_app/
 ├── app.yaml              # App metadata and default environment variables
 ├── python/
-│   ├── main.py           # Entry point (MQTT bridge)
-│   ├── measurepi_dashboard.py
-│   └── requirements.txt
+│   ├── main.py           # Entry point (starts bridge, MQTT, dashboard)
+│   ├── bridge.py
+│   ├── dashboard.py
+│   ├── mqtt.py
+│   ├── requirements.txt
+│   └── templates/
+│       └── index.html
 └── sketch/
-    ├── sketch.ino        # MCU sketch (copied from measure_uno_q.ino)
+    ├── sketch.ino        # MCU sketch
     └── sketch.yaml       # FQBN and library dependencies
 ```
 
@@ -125,9 +129,9 @@ bridge, MQTT server, and dashboard now run as separate processes, so start each 
 in its own terminal session:
 
 ```bash
-python3 bridge_mqtt.py
-python3 mqtt_server.py
-python3 measurepi_dashboard.py
+python3 uno_q_app/python/bridge.py
+python3 uno_q_app/python/mqtt.py
+python3 uno_q_app/python/dashboard.py
 ```
 
 Set the environment variables above to match your test environment. When running off-board, you may need to stub the Router Bridge calls.

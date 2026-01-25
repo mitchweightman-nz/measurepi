@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-bridge_mqtt.py – Python bridge for the UNO Q measure rig
+bridge.py – Python bridge for the UNO Q measure rig
 
 This script runs on the Linux side of an Arduino UNO Q board and
 coordinates communication between the microcontroller sketch and the

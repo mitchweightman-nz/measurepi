@@ -116,6 +116,50 @@ static bool     g_hbOn           = false;
 static uint8_t  g_measState         = MEAS_WAITING;
 static uint32_t g_measStateUntilMs  = 0;
 
+// Init + sampling state
+static uint8_t g_initSensorIndex = 0;
+static uint8_t g_initStep = 0;
+static uint32_t g_initNextMs = 0;
+static bool g_systemReady = false;
+static uint32_t g_bridgeWaitUntilMs = 0;
+static uint32_t g_bridgeNextPingMs = 0;
+
+enum OperationKind : uint8_t {
+  OP_NONE = 0,
+  OP_CAPTURE,
+  OP_MONITOR,
+};
+
+struct SensorInfo {
+  uint8_t addr;
+  uint8_t rtsPin;
+};
+
+static const SensorInfo kSensors[] = {
+  {TFLUNA_ADDR_LENGTH, PIN_RTS_1},
+  {TFLUNA_ADDR_HEIGHT, PIN_RTS_2},
+  {TFLUNA_ADDR_WIDTH,  PIN_RTS_3},
+};
+
+struct SensorSampler {
+  uint8_t addr;
+  uint8_t rtsPin;
+  uint8_t sampleIndex;
+  uint8_t goodSamples;
+  long sum;
+  uint32_t nextSampleMs;
+  uint32_t waitStartMs;
+  bool waitingRts;
+  bool done;
+  int16_t result;
+};
+
+static OperationKind g_opKind = OP_NONE;
+static bool g_opActive = false;
+static uint8_t g_opSensorIndex = 0;
+static SensorSampler g_sampler;
+static int16_t g_opResults[3] = {-1, -1, -1};
+
 /* ------------------------------ Debounce ----------------------------- */
 
 class DebouncedButton {
@@ -267,66 +311,62 @@ static void laserLoop() {
 
 /* ----------------------------- TF‑Luna ------------------------------- */
 
-static bool waitRTSHigh(uint8_t pin, uint16_t timeout_ms) {
-  uint32_t start = millis();
-  while (digitalRead(pin) == LOW) {
-    if ((uint16_t)(millis() - start) >= timeout_ms) return false;
-    delayMicroseconds(500);
+static void samplerBegin(SensorSampler &sampler, uint8_t addr, uint8_t rtsPin) {
+  sampler.addr = addr;
+  sampler.rtsPin = rtsPin;
+  sampler.sampleIndex = 0;
+  sampler.goodSamples = 0;
+  sampler.sum = 0;
+  sampler.nextSampleMs = millis();
+  sampler.waitStartMs = 0;
+  sampler.waitingRts = false;
+  sampler.done = false;
+  sampler.result = -1;
+}
+
+static void samplerStep(SensorSampler &sampler) {
+  if (sampler.done) {
+    return;
   }
-  return true;
-}
 
-static void tflStartContinuous(uint8_t addr) {
-  tfl.Soft_Reset(addr);
-  delay(50);
-  tfl.Set_Enable(addr);
-  tfl.Set_Cont_Mode(addr);
-  uint16_t frameRate = 100; // 100 Hz
-  tfl.Set_Frame_Rate(frameRate, addr);
-  int16_t dump=0;
-  (void)dump;
-  tfl.getData(dump, addr);   // throw away one sample
-}
-
-static bool tflInit(uint8_t addr, const char* name, bool &flagOk) {
-  Wire.beginTransmission(addr);
-  if (Wire.endTransmission() != 0) {
-    logf("[TF] %s: sensor not found at addr 0x%02X", name, addr);
-    flagOk = false;
-    return false;
-  }
-  delay(5);
-  tflStartContinuous(addr);
-  delay(5);
-  logf("[TF] %s: init OK addr 0x%02X", name, addr);
-  flagOk = true;
-  return true;
-}
-
-static int16_t tflReadOnceDRDY(uint8_t addr, uint8_t rtsPin) {
-  if (!waitRTSHigh(rtsPin, DRDY_TIMEOUT_MS)) {
-    int16_t dump=0;
-    tfl.getData(dump, addr);
-    return -1;
-  }
-  int16_t cm=-1;
-  if (tfl.getData(cm, addr)) return cm;
-  return -1;
-}
-
-static int16_t tflAverage(uint8_t rtsPin, uint8_t addr) {
-  long   sum  = 0;
-  uint8_t good = 0;
-  for (uint8_t i=0;i<SAMPLES_PER_SENSOR;i++) {
-    int16_t cm = tflReadOnceDRDY(addr, rtsPin);
-    if (cm >= 0) {
-      sum += cm;
-      good++;
+  uint32_t now = millis();
+  if (sampler.sampleIndex >= SAMPLES_PER_SENSOR) {
+    if (sampler.goodSamples == 0) {
+      sampler.result = -1;
+    } else {
+      sampler.result = (int16_t)((sampler.sum + (sampler.goodSamples / 2)) / sampler.goodSamples);
     }
-    delay(2);
+    sampler.done = true;
+    return;
   }
-  if (!good) return -1;
-  return (int16_t)((sum + (good/2)) / good);
+
+  if (!sampler.waitingRts) {
+    if ((int32_t)(now - sampler.nextSampleMs) < 0) {
+      return;
+    }
+    sampler.waitingRts = true;
+    sampler.waitStartMs = now;
+  }
+
+  if (digitalRead(sampler.rtsPin) == HIGH) {
+    int16_t cm = -1;
+    if (tfl.getData(cm, sampler.addr) && cm >= 0) {
+      sampler.sum += cm;
+      sampler.goodSamples++;
+    }
+    sampler.waitingRts = false;
+    sampler.sampleIndex++;
+    sampler.nextSampleMs = now + 2;
+    return;
+  }
+
+  if ((uint16_t)(now - sampler.waitStartMs) >= DRDY_TIMEOUT_MS) {
+    int16_t dump = 0;
+    tfl.getData(dump, sampler.addr);
+    sampler.waitingRts = false;
+    sampler.sampleIndex++;
+    sampler.nextSampleMs = now + 2;
+  }
 }
 
 /* ------------------------- Bridge Functions -------------------------- */
@@ -350,13 +390,9 @@ static void notifyMeasurement(float h_raw,float w_raw,float l_raw) {
   Bridge.notify("measurement_data", h_raw, w_raw, l_raw);
 }
 
-static void startCapture() {
-  logLine("[CAPTURE] TRIGGERED (begin TF‑Luna reads)");
-  int16_t length_cm_i = tflAverage(PIN_RTS_1, TFLUNA_ADDR_LENGTH);
+static void processCaptureResults(int16_t length_cm_i, int16_t height_cm_i, int16_t width_cm_i) {
   if (length_cm_i < 0) g_commFailCount++;
-  int16_t height_cm_i = tflAverage(PIN_RTS_2, TFLUNA_ADDR_HEIGHT);
   if (height_cm_i < 0) g_commFailCount++;
-  int16_t width_cm_i  = tflAverage(PIN_RTS_3, TFLUNA_ADDR_WIDTH);
   if (width_cm_i  < 0) g_commFailCount++;
   bool okCapture = (length_cm_i >= 0 && height_cm_i >= 0 && width_cm_i >= 0);
   const float length_cm = (length_cm_i >= 0) ? (float)length_cm_i : NAN;
@@ -387,10 +423,7 @@ static bool changedFrac(float oldV, float newV) {
   return (frac >= DIM_CHANGE_FRACTION);
 }
 
-static void monitorBoxPlacement() {
-  int16_t length_cm_i = tflAverage(PIN_RTS_1, TFLUNA_ADDR_LENGTH);
-  int16_t height_cm_i = tflAverage(PIN_RTS_2, TFLUNA_ADDR_HEIGHT);
-  int16_t width_cm_i  = tflAverage(PIN_RTS_3, TFLUNA_ADDR_WIDTH);
+static void processMonitorResults(int16_t length_cm_i, int16_t height_cm_i, int16_t width_cm_i) {
   if (length_cm_i < 0 || height_cm_i < 0 || width_cm_i < 0) {
     static uint8_t errCount = 0;
     if (++errCount >= 10) {
@@ -438,6 +471,135 @@ static void monitorBoxPlacement() {
   g_lastLengthCm = length_cm;
 }
 
+static void startOperation(OperationKind kind) {
+  g_opKind = kind;
+  g_opActive = true;
+  g_opSensorIndex = 0;
+  g_opResults[0] = -1;
+  g_opResults[1] = -1;
+  g_opResults[2] = -1;
+  samplerBegin(g_sampler, kSensors[0].addr, kSensors[0].rtsPin);
+}
+
+static void finishOperation() {
+  if (g_opKind == OP_CAPTURE) {
+    processCaptureResults(g_opResults[0], g_opResults[1], g_opResults[2]);
+  } else if (g_opKind == OP_MONITOR) {
+    processMonitorResults(g_opResults[0], g_opResults[1], g_opResults[2]);
+  }
+  g_opKind = OP_NONE;
+  g_opActive = false;
+}
+
+static void operationStep() {
+  if (!g_opActive) {
+    return;
+  }
+  samplerStep(g_sampler);
+  if (!g_sampler.done) {
+    return;
+  }
+  if (g_opSensorIndex < 3) {
+    g_opResults[g_opSensorIndex] = g_sampler.result;
+  }
+  g_opSensorIndex++;
+  if (g_opSensorIndex >= 3) {
+    finishOperation();
+    return;
+  }
+  samplerBegin(g_sampler, kSensors[g_opSensorIndex].addr, kSensors[g_opSensorIndex].rtsPin);
+}
+
+static void initSensorsStep() {
+  if (g_initSensorIndex >= 3) {
+    return;
+  }
+  uint32_t now = millis();
+  if ((int32_t)(now - g_initNextMs) < 0) {
+    return;
+  }
+  SensorInfo info = kSensors[g_initSensorIndex];
+  const char* name = (g_initSensorIndex == 0) ? "TF1(Length)"
+                     : (g_initSensorIndex == 1) ? "TF2(Height)"
+                     : "TF3(Width)";
+  bool* flagOk = (g_initSensorIndex == 0) ? &g_tfInit1Ok
+                 : (g_initSensorIndex == 1) ? &g_tfInit2Ok
+                 : &g_tfInit3Ok;
+
+  switch (g_initStep) {
+    case 0: {
+      Wire.beginTransmission(info.addr);
+      if (Wire.endTransmission() != 0) {
+        logf("[TF] %s: sensor not found at addr 0x%02X", name, info.addr);
+        *flagOk = false;
+        g_initSensorIndex++;
+        return;
+      }
+      tfl.Soft_Reset(info.addr);
+      g_initNextMs = now + 50;
+      g_initStep = 1;
+      break;
+    }
+    case 1:
+      tfl.Set_Enable(info.addr);
+      g_initNextMs = now + 5;
+      g_initStep = 2;
+      break;
+    case 2:
+      tfl.Set_Cont_Mode(info.addr);
+      g_initNextMs = now + 5;
+      g_initStep = 3;
+      break;
+    case 3: {
+      uint16_t frameRate = 100;
+      tfl.Set_Frame_Rate(frameRate, info.addr);
+      g_initNextMs = now + 5;
+      g_initStep = 4;
+      break;
+    }
+    case 4: {
+      int16_t dump = 0;
+      tfl.getData(dump, info.addr);
+      logf("[TF] %s: init OK addr 0x%02X", name, info.addr);
+      *flagOk = true;
+      g_initStep = 0;
+      g_initSensorIndex++;
+      break;
+    }
+    default:
+      g_initStep = 0;
+      break;
+  }
+}
+
+static void bridgeInitStep() {
+  if (g_systemReady) {
+    return;
+  }
+  uint32_t now = millis();
+  if (g_bridgeWaitUntilMs != 0 && (int32_t)(now - g_bridgeWaitUntilMs) < 0) {
+    return;
+  }
+  if (g_bridgeNextPingMs != 0 && (int32_t)(now - g_bridgeNextPingMs) < 0) {
+    return;
+  }
+  bool start = false;
+  Bridge.call("linux_started").result(start);
+  if (start) {
+    Bridge.provide("capture", bridgeCapture);
+    Bridge.notify("mcu_ready");
+    logLine("# Ready. UNO‑Q Bridge initialised.");
+    g_nextHeartbeatMs = millis() + 2000;
+    g_nextMonitorMs   = millis() + 1000;
+    g_nextLivePrintMs = millis();
+    g_measState       = MEAS_WAITING;
+    g_measStateUntilMs= 0;
+    g_systemReady = true;
+    return;
+  }
+  g_bridgeNextPingMs = now + 200;
+}
+
 /* -------------------------------- Setup ------------------------------ */
 
 void setup() {
@@ -456,24 +618,8 @@ void setup() {
   Wire.begin();
   Wire.setClock(I2C_CLOCK_HZ);
   logf("[I2C] Started at %lu Hz", (unsigned long)I2C_CLOCK_HZ);
-  tflInit(TFLUNA_ADDR_LENGTH, "TF1(Length)", g_tfInit1Ok);
-  tflInit(TFLUNA_ADDR_HEIGHT, "TF2(Height)", g_tfInit2Ok);
-  tflInit(TFLUNA_ADDR_WIDTH, "TF3(Width)",  g_tfInit3Ok);
   Bridge.begin();
-  delay(2000);
-  bool start = false;
-  while (!start) {
-    Bridge.call("linux_started").result(start);
-    delay(200);
-  }
-  Bridge.provide("capture", bridgeCapture);
-  Bridge.notify("mcu_ready");
-  logLine("# Ready. UNO‑Q Bridge initialised.");
-  g_nextHeartbeatMs = millis() + 2000;
-  g_nextMonitorMs   = millis() + 1000;
-  g_nextLivePrintMs = millis();
-  g_measState       = MEAS_WAITING;
-  g_measStateUntilMs= 0;
+  g_bridgeWaitUntilMs = millis() + 2000;
 }
 
 /* -------------------------------- Loop ------------------------------- */
@@ -481,6 +627,12 @@ void setup() {
 void loop() {
   Bridge.loop();
   laserLoop();
+  if (!g_systemReady) {
+    initSensorsStep();
+    bridgeInitStep();
+    statusLedsUpdate();
+    return;
+  }
   if (g_measState == MEAS_DONE || g_measState == MEAS_ERROR) {
     if ((int32_t)(millis() - g_measStateUntilMs) >= 0) {
       g_measState = MEAS_WAITING;
@@ -491,19 +643,20 @@ void loop() {
     logLine("[BTN] CAPTURE pressed");
     g_trigCapture = true;
   }
-  if ((int32_t)(millis() - g_nextMonitorMs) >= 0) {
-    monitorBoxPlacement();
+  if (g_trigCapture && !g_opActive) {
+    g_trigCapture = false;
+    g_measState   = MEAS_RUNNING;
+    logLine("[CAPTURE] Command accepted");
+    logLine("[CAPTURE] TRIGGERED (begin TF‑Luna reads)");
+    startOperation(OP_CAPTURE);
+  }
+  if ((int32_t)(millis() - g_nextMonitorMs) >= 0 && !g_opActive) {
+    startOperation(OP_MONITOR);
     g_nextMonitorMs = millis() + MONITOR_INTERVAL_MS;
   }
   if ((int32_t)(millis() - g_nextHeartbeatMs) >= 0) {
     logf("[SYS] alive laser=%u", g_laserOn);
     g_nextHeartbeatMs = millis() + 2000;
   }
-  if (g_trigCapture) {
-    g_trigCapture = false;
-    g_measState   = MEAS_RUNNING;
-    logLine("[CAPTURE] Command accepted");
-    startCapture();
-  }
-  delay(1);
+  operationStep();
 }

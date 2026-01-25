@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-mqtt_server.py – MQTT process for the UNO Q measure rig
+mqtt.py – MQTT process for the UNO Q measure rig
 
 Runs as a standalone process that connects to the MQTT broker, publishes
 measurement/log payloads received over a local IPC socket, and forwards
