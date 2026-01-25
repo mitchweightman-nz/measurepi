@@ -19,6 +19,27 @@
 #include <Adafruit_NeoPixel.h>
 #include <Arduino_RouterBridge.h>
 
+
+// -----------------------------------------------------------------------------
+// Safe logging shim for UNO Q (Zephyr)
+// - Avoids vsnprintf/va_list and float printf issues
+// - Keeps existing logf(\"fmt\", ...) call sites compiling by printing only fmt
+// -----------------------------------------------------------------------------
+static inline void log_msg(const char* msg) {
+  Serial.println(msg);
+}
+
+// Provide a logf macro (prints only the format string)
+// This intentionally discards additional arguments.
+#define logf(fmt, ...) log_msg(fmt)
+
+// Forward declarations for Arduino's auto-generated prototypes.
+// The Arduino preprocessor may emit prototypes before type definitions, so we
+// declare these types up-front to keep compilation stable on UNO Q (Zephyr).
+enum OperationKind : uint8_t;
+struct SensorSampler;
+
+
 /* ------------------------------ Config ------------------------------ */
 
 // Buttons
@@ -200,13 +221,6 @@ static void logLine(const char* s) {
   Serial.println(s);
 }
 
-static void logf(const char* fmt, ...) {
-  char line[256];
-  va_list ap; va_start(ap, fmt);
-  vsnprintf(line, sizeof(line), fmt, ap);
-  va_end(ap);
-  logLine(line);
-}
 
 /* --------------------------- NeoPixel status ------------------------- */
 
@@ -625,7 +639,7 @@ void setup() {
 /* -------------------------------- Loop ------------------------------- */
 
 void loop() {
-  Bridge.loop();
+// Bridge.loop(); // Arduino_RouterBridge has no loop() on UNO Q
   laserLoop();
   if (!g_systemReady) {
     initSensorsStep();
