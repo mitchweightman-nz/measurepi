@@ -27,12 +27,14 @@ import threading
 import time
 import traceback
 import html
+from typing import Optional
 # collections.deque provides efficient FIFO buffers
 from collections import deque
 
 # ─── Third‑party libraries ──────────────────────────
 import paho.mqtt.client as mqtt
 from flask import Flask, jsonify, make_response, render_template, request
+from werkzeug.serving import make_server
 import urllib.parse
 
 # ─── Configuration Constants ─────────────────────────
@@ -521,9 +523,13 @@ def manual_weight_api_route():
 
 # ─── Main Application Logic ────────────────────
 
-def run_application():
+def run_application(stop_event: Optional[threading.Event] = None):
     print("[SYSTEM] MeasurePi dashboard is starting up...")
+    if stop_event is None:
+        stop_event = threading.Event()
     flask_port = max(7000, int(os.getenv("FLASK_PORT", os.getenv("PORT", 7000))))
+    server = None
+    server_thread = None
     try:
         if MQTT_BROKER:
             try:
@@ -535,14 +541,24 @@ def run_application():
         else:
             print("[MQTT] MQTT_BROKER not configured. MQTT features disabled.")
         print(f"[SYSTEM] Starting Flask web server on http://0.0.0.0:{flask_port}...")
-        app.run(host="0.0.0.0", port=flask_port, threaded=True, debug=False)
+        server = make_server("0.0.0.0", flask_port, app, threaded=True)
+        server_thread = threading.Thread(target=server.serve_forever, name="dashboard-web")
+        server_thread.start()
+        while not stop_event.is_set():
+            time.sleep(0.5)
     except KeyboardInterrupt:
         print("\n[SYSTEM] Shutdown requested by user (KeyboardInterrupt).")
+        stop_event.set()
     except Exception as e:
         print(f"[ERROR] Unhandled exception in main application: {e}")
         traceback.print_exc()
     finally:
         print("[SYSTEM] Initiating shutdown sequence...")
+        stop_event.set()
+        if server is not None:
+            server.shutdown()
+        if server_thread is not None:
+            server_thread.join()
         try:
             if mqtt_client.is_connected():
                 print("[MQTT] Disconnecting MQTT client...")
@@ -554,6 +570,10 @@ def run_application():
         except Exception:
             pass
         print("[SYSTEM] MeasurePi dashboard has shut down.")
+
+
+def main(stop_event: Optional[threading.Event] = None):
+    run_application(stop_event)
 
 if __name__ == "__main__":
     run_application()
