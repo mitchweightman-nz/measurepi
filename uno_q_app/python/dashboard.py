@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-measurepi_dashboard.py — Simplified MeasurePi dashboard for the UNO Q
+dashboard.py — Simplified MeasurePi dashboard for the UNO Q
 
 This module provides a lightweight Flask dashboard and MQTT client for the
 Arduino UNO Q.  It subscribes to box measurement messages published by the
-UNO Q bridge (`bridge_mqtt.py`) and exposes a web API compatible with the
+UNO Q bridge (`bridge.py`) and exposes a web API compatible with the
 original MeasurePi Raspberry Pi dashboard.  By moving the dashboard to the
 UNO Q’s Linux side, all functionality previously running on the Raspberry Pi
 can reside on a single device.

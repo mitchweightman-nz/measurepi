@@ -1,0 +1,24 @@
+name: measurepi
+version: "1.0.0"
+description: "MeasurePi UNO Q measurement rig"
+services:
+  - name: app
+    command: python3
+    args:
+      - python/main.py
+environment:
+  MQTT_BROKER: "10.1.1.85"
+  MQTT_PORT: "1883"
+  MQTT_CMD_TOPIC: "measure/cmd"
+  MQTT_DATA_TOPIC: "measure/data"
+  MQTT_LOG_TOPIC: "measure/log"
+  MQTT_CLIENT_ID: "uno-q-bridge"
+  MQTT_IPC_HOST: "127.0.0.1"
+  MQTT_IPC_PORT: "8765"
+  BRIDGE_CMD_HOST: "127.0.0.1"
+  BRIDGE_CMD_PORT: "8766"
+  REF_LENGTH_CM: "80.0"
+  REF_HEIGHT_CM: "89.0"
+  REF_WIDTH_CM: "70.0"
+  DASHBOARD_PORT: "5000"
+  ALLOWED_ORIGINS: "*"
