@@ -21,8 +21,8 @@ def _start_background(name, target, stop_event):
         try:
             target(stop_event)
         except Exception:
-            print(f"[SYSTEM] Background worker {name} terminated unexpectedly.")
-            traceback.print_exc()
+            print(f"[SYSTEM] Background worker {name} terminated unexpectedly.", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             stop_event.set()
             os._exit(1)
 
