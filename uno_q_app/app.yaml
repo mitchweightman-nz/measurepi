@@ -6,6 +6,8 @@ services:
     command: python3
     args:
       - python/main.py
+    ports:
+      - 5000
 environment:
   MQTT_BROKER: "10.1.1.85"
   MQTT_PORT: "1883"
@@ -17,6 +19,8 @@ environment:
   MQTT_IPC_PORT: "8765"
   BRIDGE_CMD_HOST: "127.0.0.1"
   BRIDGE_CMD_PORT: "8766"
+  MQTT_IPC_BIND_HOST: "0.0.0.0"
+  BRIDGE_CMD_BIND_HOST: "0.0.0.0"
   REF_LENGTH_CM: "80.0"
   REF_HEIGHT_CM: "89.0"
   REF_WIDTH_CM: "70.0"

@@ -8,6 +8,7 @@ Arduino App CLI can manage one service.
 """
 
 import os
+import sys
 import threading
 import traceback
 
