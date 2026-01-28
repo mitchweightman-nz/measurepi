@@ -65,6 +65,7 @@ MQTT_LOG_TOPIC = os.getenv("MQTT_LOG_TOPIC", "measure/log")
 MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID", "uno-q-bridge")
 
 MQTT_IPC_HOST = os.getenv("MQTT_IPC_HOST", "127.0.0.1")
+MQTT_IPC_BIND_HOST = os.getenv("MQTT_IPC_BIND_HOST", "0.0.0.0")
 MQTT_IPC_PORT = _get_int_env("MQTT_IPC_PORT", 8765)
 BRIDGE_CMD_HOST = os.getenv("BRIDGE_CMD_HOST", "127.0.0.1")
 BRIDGE_CMD_PORT = _get_int_env("BRIDGE_CMD_PORT", 8766)
@@ -155,13 +156,13 @@ class _BridgePayloadHandler(socketserver.StreamRequestHandler):
 
 def _start_ipc_server() -> socketserver.TCPServer:
     server = socketserver.ThreadingTCPServer(
-        (MQTT_IPC_HOST, MQTT_IPC_PORT),
+        (MQTT_IPC_BIND_HOST, MQTT_IPC_PORT),
         _BridgePayloadHandler,
     )
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    _log(f"[IPC] Listening for bridge payloads on {MQTT_IPC_HOST}:{MQTT_IPC_PORT}.")
+    _log(f"[IPC] Listening for bridge payloads on {MQTT_IPC_BIND_HOST}:{MQTT_IPC_PORT}.")
     return server
 
 

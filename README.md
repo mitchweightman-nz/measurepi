@@ -78,6 +78,8 @@ The application reads environment variables so you can adjust settings without e
 | `MQTT_IPC_PORT` | `8765` | Port for bridge → MQTT IPC (both processes). |
 | `BRIDGE_CMD_HOST` | `127.0.0.1` | Host for MQTT → bridge command IPC (both processes). |
 | `BRIDGE_CMD_PORT` | `8766` | Port for MQTT → bridge command IPC (both processes). |
+| `MQTT_IPC_BIND_HOST` | `0.0.0.0` | Bind host for the MQTT IPC server (mqtt.py). |
+| `BRIDGE_CMD_BIND_HOST` | `0.0.0.0` | Bind host for the bridge command server (bridge.py). |
 | `REF_LENGTH_CM` | `80.0` | Reference distance for the length sensor (bridge.py). |
 | `REF_HEIGHT_CM` | `89.0` | Reference distance for the height sensor (bridge.py). |
 | `REF_WIDTH_CM` | `70.0` | Reference distance for the width sensor (bridge.py). |

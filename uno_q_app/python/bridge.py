@@ -84,6 +84,7 @@ def _get_float_env(name: str, default: float) -> float:
 MQTT_IPC_HOST = os.getenv("MQTT_IPC_HOST", "127.0.0.1")
 MQTT_IPC_PORT = _get_int_env("MQTT_IPC_PORT", 8765)
 BRIDGE_CMD_HOST = os.getenv("BRIDGE_CMD_HOST", "127.0.0.1")
+BRIDGE_CMD_BIND_HOST = os.getenv("BRIDGE_CMD_BIND_HOST", "0.0.0.0")
 BRIDGE_CMD_PORT = _get_int_env("BRIDGE_CMD_PORT", 8766)
 
 REF_LENGTH_CM = _get_float_env("REF_LENGTH_CM", 80.0)
@@ -185,13 +186,13 @@ class _BridgeCommandHandler(socketserver.StreamRequestHandler):
 
 def _start_command_server() -> socketserver.TCPServer:
     server = socketserver.ThreadingTCPServer(
-        (BRIDGE_CMD_HOST, BRIDGE_CMD_PORT),
+        (BRIDGE_CMD_BIND_HOST, BRIDGE_CMD_PORT),
         _BridgeCommandHandler,
     )
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    _log(f"[BRIDGE] Command server listening on {BRIDGE_CMD_HOST}:{BRIDGE_CMD_PORT}.")
+    _log(f"[BRIDGE] Command server listening on {BRIDGE_CMD_BIND_HOST}:{BRIDGE_CMD_PORT}.")
     return server
 
 
