@@ -19,6 +19,137 @@
 #include <Adafruit_NeoPixel.h>
 #include <Arduino_RouterBridge.h>
 
+
+// -----------------------------------------------------------------------------
+// Logging on UNO Q (Zephyr) without vsnprintf
+// Supports a small subset of printf-style formatting used in this sketch:
+//   %d %u %ld %lu %x %X %02X %s %c %%
+//   %f with .0/.1/.2 precision (prints as fixed-point, no libc float printf)
+// This avoids pulling in vsnprintf (not linked by default on UNO Q toolchain).
+// -----------------------------------------------------------------------------
+// Forward declarations for Arduino's auto-generated prototypes
+enum OperationKind : uint8_t;
+struct SensorSampler;
+
+#include <stdarg.h>
+
+static inline long _round_to_scale(double v, long scale) {
+  // scale > 0
+  double x = v * (double)scale;
+  if (x >= 0) return (long)(x + 0.5);
+  return (long)(x - 0.5);
+}
+
+static void _print_int_base(unsigned long v, unsigned base, bool upper, int minWidth, char pad) {
+  char buf[32];
+  int i = 0;
+  do {
+    unsigned digit = (unsigned)(v % base);
+    buf[i++] = (digit < 10) ? char('0' + digit) : char((upper ? 'A' : 'a') + (digit - 10));
+    v /= base;
+  } while (v && i < (int)sizeof(buf));
+  while (i < minWidth && i < (int)sizeof(buf)) buf[i++] = pad;
+  while (i--) Serial.write(buf[i]);
+}
+
+static void _print_signed(long v) {
+  if (v < 0) { Serial.write('-'); _print_int_base((unsigned long)(-v), 10, false, 0, ' '); }
+  else _print_int_base((unsigned long)v, 10, false, 0, ' ');
+}
+
+static void _print_float_fixed(double v, int prec) {
+  if (prec < 0) prec = 0;
+  if (prec > 2) prec = 2;
+  long scale = (prec == 0) ? 1 : (prec == 1 ? 10 : 100);
+  long scaled = _round_to_scale(v, scale);
+  if (scaled < 0) { Serial.write('-'); scaled = -scaled; }
+  unsigned long ip = (unsigned long)(scaled / scale);
+  unsigned long fp = (unsigned long)(scaled % scale);
+  _print_int_base(ip, 10, false, 0, ' ');
+  if (prec > 0) {
+    Serial.write('.');
+    if (prec == 1) {
+      Serial.write(char('0' + fp));
+    } else { // prec == 2
+      Serial.write(char('0' + (fp / 10)));
+      Serial.write(char('0' + (fp % 10)));
+    }
+  }
+}
+
+static void logf(const char* fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  for (const char* p = fmt; *p; ++p) {
+    if (*p != '%') { Serial.write(*p); continue; }
+    ++p;
+    if (!*p) break;
+
+    // flags/width (minimal)
+    char pad = ' ';
+    int width = 0;
+    bool longMod = false;
+
+    if (*p == '%') { Serial.write('%'); continue; }
+
+    if (*p == '0') { pad = '0'; ++p; }
+    while (*p >= '0' && *p <= '9') { width = width * 10 + (*p - '0'); ++p; }
+
+    int prec = -1;
+    if (*p == '.') {
+      ++p;
+      prec = 0;
+      while (*p >= '0' && *p <= '9') { prec = prec * 10 + (*p - '0'); ++p; }
+    }
+
+    if (*p == 'l') { longMod = true; ++p; }
+
+    switch (*p) {
+      case 'd':
+      case 'i':
+        if (longMod) _print_signed(va_arg(ap, long));
+        else _print_signed((long)va_arg(ap, int));
+        break;
+      case 'u':
+        if (longMod) _print_int_base(va_arg(ap, unsigned long), 10, false, width, pad);
+        else _print_int_base((unsigned long)va_arg(ap, unsigned int), 10, false, width, pad);
+        break;
+      case 'x':
+        if (longMod) _print_int_base(va_arg(ap, unsigned long), 16, false, width, pad);
+        else _print_int_base((unsigned long)va_arg(ap, unsigned int), 16, false, width, pad);
+        break;
+      case 'X':
+        if (longMod) _print_int_base(va_arg(ap, unsigned long), 16, true, width, pad);
+        else _print_int_base((unsigned long)va_arg(ap, unsigned int), 16, true, width, pad);
+        break;
+      case 'c': {
+        int c = va_arg(ap, int);
+        Serial.write((char)c);
+        break;
+      }
+      case 's': {
+        const char* s = va_arg(ap, const char*);
+        if (!s) s = "(null)";
+        Serial.print(s);
+        break;
+      }
+      case 'f': {
+        // float is promoted to double in varargs
+        double v = va_arg(ap, double);
+        _print_float_fixed(v, (prec < 0) ? 2 : prec);
+        break;
+      }
+      default:
+        // Unknown specifier: print it literally to avoid hiding issues
+        Serial.write('%');
+        Serial.write(*p);
+        break;
+    }
+  }
+  va_end(ap);
+  Serial.println();
+}
+
 /* ------------------------------ Config ------------------------------ */
 
 // Buttons
@@ -200,13 +331,6 @@ static void logLine(const char* s) {
   Serial.println(s);
 }
 
-static void logf(const char* fmt, ...) {
-  char line[256];
-  va_list ap; va_start(ap, fmt);
-  vsnprintf(line, sizeof(line), fmt, ap);
-  va_end(ap);
-  logLine(line);
-}
 
 /* --------------------------- NeoPixel status ------------------------- */
 
@@ -625,7 +749,7 @@ void setup() {
 /* -------------------------------- Loop ------------------------------- */
 
 void loop() {
-  Bridge.loop();
+// Bridge.loop(); // Arduino_RouterBridge has no loop() on UNO Q
   laserLoop();
   if (!g_systemReady) {
     initSensorsStep();
