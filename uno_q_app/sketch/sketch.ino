@@ -376,6 +376,33 @@ static void bridgeCapture() {
   g_trigCapture = true;
 }
 
+template <int N>
+struct BridgePriority : BridgePriority<N - 1> {};
+
+template <>
+struct BridgePriority<0> {};
+
+template <typename T>
+auto bridgePump(T &bridge, BridgePriority<2>) -> decltype(bridge.loop(), void()) {
+  bridge.loop();
+}
+
+template <typename T>
+auto bridgePump(T &bridge, BridgePriority<1>) -> decltype(bridge.poll(), void()) {
+  bridge.poll();
+}
+
+template <typename T>
+auto bridgePump(T &bridge, BridgePriority<0>) -> decltype(bridge.update(), void()) {
+  bridge.update();
+}
+
+inline void bridgePump(...) {}
+
+static void bridgeLoop() {
+  bridgePump(Bridge, BridgePriority<2>{});
+}
+
 /* ------------------------------ Capture/publish -------------------------- */
 
 // Compute box dimension from raw distance and reference, clamp at >=0
@@ -625,7 +652,7 @@ void setup() {
 /* -------------------------------- Loop ------------------------------- */
 
 void loop() {
-  Bridge.loop();
+  bridgeLoop();
   laserLoop();
   if (!g_systemReady) {
     initSensorsStep();
