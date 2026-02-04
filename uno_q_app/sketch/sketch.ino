@@ -18,6 +18,7 @@
 #include <TFLI2C.h>
 #include <Adafruit_NeoPixel.h>
 #include <Arduino_RouterBridge.h>
+#include <utility>
 
 /* ------------------------------ Config ------------------------------ */
 
@@ -382,18 +383,18 @@ struct BridgePriority : BridgePriority<N - 1> {};
 template <>
 struct BridgePriority<0> {};
 
-template <typename T>
-auto bridgePump(T &bridge, BridgePriority<2>) -> decltype(bridge.loop(), void()) {
+template <typename T, typename = decltype(std::declval<T &>().loop())>
+void bridgePump(T &bridge, BridgePriority<2>) {
   bridge.loop();
 }
 
-template <typename T>
-auto bridgePump(T &bridge, BridgePriority<1>) -> decltype(bridge.poll(), void()) {
+template <typename T, typename = decltype(std::declval<T &>().poll())>
+void bridgePump(T &bridge, BridgePriority<1>) {
   bridge.poll();
 }
 
-template <typename T>
-auto bridgePump(T &bridge, BridgePriority<0>) -> decltype(bridge.update(), void()) {
+template <typename T, typename = decltype(std::declval<T &>().update())>
+void bridgePump(T &bridge, BridgePriority<0>) {
   bridge.update();
 }
 
