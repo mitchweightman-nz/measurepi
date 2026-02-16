@@ -25,6 +25,28 @@ MeasurePi is a self-contained application for the **Arduino UNO Q** that measure
 * Network access on the UNO Q to install packages via `apt`.
 * **Arduino App CLI** (`arduino-app-cli`).
 
+## TF-Luna → Arduino UNO Q Wiring (Outline)
+
+Each TF-Luna sensor is on the same I²C bus with a unique address. Tie the power and I²C lines together, then route each sensor's RTS/DRDY line to its own GPIO so the sketch can monitor readiness.
+
+| TF-Luna signal | Arduino UNO Q connection | Notes |
+| --- | --- | --- |
+| VCC | 5V | Power the sensor(s) from the UNO Q 5V rail. |
+| GND | GND | Common ground shared across all sensors. |
+| SDA | SDA (I²C data) | Shared across all sensors. |
+| SCL | SCL (I²C clock) | Shared across all sensors. |
+| RTS/DRDY (Length) | D4 | `PIN_RTS_1` in the sketch. |
+| RTS/DRDY (Height) | D5 | `PIN_RTS_2` in the sketch. |
+| RTS/DRDY (Width) | D6 | `PIN_RTS_3` in the sketch. |
+
+Additional related wiring used by the measurement rig:
+
+* NeoPixel strip DIN → D7. (NeoPixel VCC and GND to 5V/GND.)
+* Laser driver control → D10.
+* Capture button → D12 (active LOW to GND with internal pull-up).
+* Live-mode toggle → A0 (active LOW to GND).
+* Optional external I²C reset line → D11 (active LOW).
+
 ## Deployment on UNO Q
 
 The repository includes a helper script, `deploy_uno_q.sh`, that automates installation and deployment. If the `uno_q_app` directory is missing, the script will generate the app bundle from the repository sources (sketch, bridge, dashboard, and templates).
