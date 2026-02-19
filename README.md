@@ -62,11 +62,11 @@ arduino-app-cli app logs measurepi
 
 ## Configuration
 
-The application reads environment variables so you can adjust settings without editing code. Set them in the systemd unit or inline before starting the app.
+The application reads environment variables so you can adjust settings without editing code. Runtime defaults come from the Python modules, and UNO Q app deployments can override them via `uno_q_app/app.yaml`.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `MQTT_BROKER` | `10.1.1.85` | MQTT broker hostname or IP (mqtt.py). |
+| `MQTT_BROKER` | `127.0.0.1` (runtime), `10.1.1.85` (`app.yaml`) | MQTT broker hostname or IP. |
 | `MQTT_PORT` | `1883` | MQTT broker port (mqtt.py). |
 | `MQTT_USER` | (unset) | MQTT username (mqtt.py). |
 | `MQTT_PASS` | (unset) | MQTT password (mqtt.py). |
@@ -83,8 +83,11 @@ The application reads environment variables so you can adjust settings without e
 | `REF_LENGTH_CM` | `80.0` | Reference distance for the length sensor (bridge.py). |
 | `REF_HEIGHT_CM` | `89.0` | Reference distance for the height sensor (bridge.py). |
 | `REF_WIDTH_CM` | `70.0` | Reference distance for the width sensor (bridge.py). |
-| `DASHBOARD_PORT` | `5000` | Flask dashboard port. |
-| `ALLOWED_ORIGINS` | `*` | Comma-separated list of allowed dashboard origins. |
+| `FLASK_PORT` | `7000` minimum in `dashboard.py`; `5000` in `app.yaml` | Dashboard HTTP port (effective value is clamped to at least 7000 by code). |
+| `PORT` | `7000` fallback | Alternate dashboard port variable used if `FLASK_PORT` is unset. |
+| `CORS_ALLOWED_ORIGINS` | `https://nzc.gosweetspot.com` | Comma-separated list of allowed origins for CORS/CSRF checks. |
+
+> Note: `DASHBOARD_PORT` and `ALLOWED_ORIGINS` are present in `app.yaml`, but current Python code uses `FLASK_PORT`/`PORT` and `CORS_ALLOWED_ORIGINS`.
 
 Example:
 ```bash
@@ -127,13 +130,19 @@ Older Raspberry Pi and UNO R4 WiFi assets have been moved into the `legacy/` dir
 ## Developing and Testing Locally
 
 You can run the Python dashboard and MQTT bridge on a regular computer for testing. The
-bridge, MQTT server, and dashboard now run as separate processes, so start each script
-in its own terminal session:
+bridge, MQTT server, and dashboard are standalone modules, so you can either run them
+individually (three terminals):
 
 ```bash
 python3 uno_q_app/python/bridge.py
 python3 uno_q_app/python/mqtt.py
 python3 uno_q_app/python/dashboard.py
+```
+
+Or run the production-style supervisor (`main.py`), which starts all three services:
+
+```bash
+python3 uno_q_app/python/main.py
 ```
 
 Set the environment variables above to match your test environment. When running off-board, you may need to stub the Router Bridge calls.
